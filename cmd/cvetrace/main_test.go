@@ -281,3 +281,17 @@ func TestScanFailOnRejectsAnUnknownSeverity(t *testing.T) {
 		t.Errorf("expected an explanatory error message, got:\n%s", out)
 	}
 }
+
+// TestVersionFlagPrintsDevByALocalBuild confirms a plain "go run" build (no
+// release workflow, no -ldflags override) reports itself as "dev" -- the
+// release pipeline is what overrides internal/cli.Version to a real tag.
+func TestVersionFlagPrintsDevByALocalBuild(t *testing.T) {
+	cmd := exec.Command("go", "run", ".", "--version")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("cvetrace --version failed: %v\noutput:\n%s", err, out)
+	}
+	if strings.TrimSpace(string(out)) != "cvetrace dev" {
+		t.Errorf("got %q, want %q", strings.TrimSpace(string(out)), "cvetrace dev")
+	}
+}

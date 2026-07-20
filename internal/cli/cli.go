@@ -13,6 +13,27 @@ import (
 	"github.com/jjuhric/cvetrace-go/internal/trace"
 )
 
+// Version is the released version string (e.g. "v1.2.3"), reported by
+// `cvetrace -v`/`--version`/`version`. It defaults to "dev" -- a locally
+// built binary (go build/go run without extra flags) always identifies
+// itself this way. The release workflow (.github/workflows/release.yml)
+// overrides it at build time via `-ldflags "-X
+// github.com/jjuhric/cvetrace-go/internal/cli.Version=v1.2.3"`.
+//
+// Go note: this is a genuinely compile-time trick, not something achievable
+// with a plain Go assignment -- `-ldflags -X importpath.Var=value` tells
+// the *linker* to overwrite an already-compiled package-level string
+// variable's value while producing the final binary, after all of this
+// project's own Go code has already been compiled. It only works on
+// package-level `var` declarations of type string (not `const`, since a Go
+// `const` is resolved entirely at compile time with no linker step left to
+// intervene in). The closest JS equivalent is a bundler's build-time
+// define/replace step (e.g. webpack's DefinePlugin substituting
+// `process.env.NODE_ENV`) -- same idea of baking a value in at build time
+// rather than reading it at runtime, just implemented at the linker level
+// instead of a source-rewriting build step.
+var Version = "dev"
+
 const rootUsage = `cvetrace scans a Node.js/Java(Maven+Gradle)/Python project directory for
 known CVEs in its dependencies, using the free OSV.dev vulnerability
 database (no API key required).
@@ -46,6 +67,7 @@ QUICK START
   cvetrace scan . --fail-on critical  Exit non-zero for CI gating
   cvetrace scan . --exclude test/**   Skip a directory tree
   cvetrace scan . --ignore CVE-2021-1 Dismiss a reviewed/accepted finding
+  cvetrace --version                  Print the version and exit
 
 Run 'cvetrace scan -h' for the full option reference.
 
@@ -192,6 +214,9 @@ func Run(args []string) int {
 		return runScan(args[2:])
 	case "-h", "--help", "help":
 		fmt.Print(rootUsage)
+		return 0
+	case "-v", "--version", "version":
+		fmt.Println("cvetrace " + Version)
 		return 0
 	default:
 		fmt.Fprintf(os.Stderr, "cvetrace: unknown command %q\n\n%s", args[1], rootUsage)

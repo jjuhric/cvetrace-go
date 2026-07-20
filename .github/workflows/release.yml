@@ -1,0 +1,86 @@
+name: release
+
+# Fires on any tag matching v1.2.3 (semver, "v" prefix) -- push a tag with
+# `git tag v1.2.3 && git push origin v1.2.3` to cut a release. This is the
+# literal fulfillment of this project's whole reason for existing in Go
+# rather than staying a Node script: a real, downloadable, zero-install
+# binary for every major OS/architecture, published automatically.
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+# The default GITHUB_TOKEN is read-only unless a job explicitly asks for
+# more -- `gh release create` needs permission to create a release and
+# upload files to it, hence contents: write.
+permissions:
+  contents: write
+
+jobs:
+  # Never publish a release the test suite itself wouldn't pass -- this job
+  # is a hard gate: build-and-release below only starts if it succeeds
+  # (`needs: test`).
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: false
+      - run: go test ./...
+
+  build-and-release:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      # Go note: GOOS/GOARCH are just environment variables the Go toolchain
+      # itself reads -- cross-compiling for a different OS/CPU than the one
+      # actually running this job needs no emulator, no Docker container
+      # targeting that OS, and no extra toolchain install, unlike C/C++
+      # cross-compilation. One `go build` invocation per target is all it
+      # takes; the shell function below is just to avoid repeating the same
+      # five lines five times.
+      #
+      # -ldflags "-X ....Version=$GITHUB_REF_NAME" bakes the tag name (e.g.
+      # "v1.2.3") into the binary at build time -- see internal/cli.Version's
+      # doc comment for exactly how this works and why it has to be done
+      # this way rather than a plain assignment.
+      - name: Cross-compile every supported OS/architecture
+        run: |
+          mkdir -p dist
+          build() {
+            os=$1; arch=$2; ext=$3
+            out="dist/cvetrace-${os}-${arch}${ext}"
+            echo "Building $out"
+            GOOS="$os" GOARCH="$arch" go build \
+              -ldflags "-X github.com/jjuhric/cvetrace-go/internal/cli.Version=${GITHUB_REF_NAME}" \
+              -o "$out" ./cmd/cvetrace
+          }
+          build windows amd64 .exe
+          build darwin  amd64 ""
+          build darwin  arm64 ""
+          build linux   amd64 ""
+          build linux   arm64 ""
+
+      - name: Generate checksums
+        working-directory: dist
+        run: sha256sum * > checksums.txt
+
+      # `gh` (the GitHub CLI) is preinstalled on every GitHub-hosted runner,
+      # so this needs no marketplace action for the actual publish step --
+      # consistent with how ci.yml keeps this project's action list to just
+      # actions/checkout and actions/setup-go.
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" dist/* \
+            --title "${GITHUB_REF_NAME}" \
+            --generate-notes

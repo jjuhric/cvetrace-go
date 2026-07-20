@@ -7,17 +7,16 @@ nothing to install to run it, unlike the Node.js original (which needs Node
 installed) or a compiled-JS approach like Bun (which bundles a whole JS runtime
 into the binary, making it much larger).
 
-> **Status: feature-complete, no release pipeline yet.** Node, Java/Maven, Java/Gradle,
-> and Python are all detected now (Gradle by actually invoking the target project's own
-> Gradle wrapper, same as the Node version), every finding is tagged with the Node
-> version's full "remediation intelligence" field set (`dependencyScope`/`usageContext`/
+> **Status: feature-complete.** Node, Java/Maven, Java/Gradle, and Python are all
+> detected now (Gradle by actually invoking the target project's own Gradle wrapper,
+> same as the Node version), every finding is tagged with the Node version's full
+> "remediation intelligence" field set (`dependencyScope`/`usageContext`/
 > `dependencyPath`/`codeReference`/`updateImpact`/`recommendedVersion`/
 > `advisoryDetails`/`remediationTier`/`overrideSnippet`/`priorityScore`/`priorityLabel`),
-> and `--fail-on`/`--exclude`/`--ignore` plus a `.cvetraceignore` file all work -- see
-> [What's implemented so far](#whats-implemented-so-far). What's left is a release
-> pipeline publishing downloadable binaries — for now this is run from source (see
-> [Usage](#usage)); prebuilt, zero-install binaries are the whole point of doing this in
-> Go, and are a planned near-term addition.
+> `--fail-on`/`--exclude`/`--ignore` plus a `.cvetraceignore` file all work, and
+> [tagged releases](#installing-a-prebuilt-binary) publish zero-install binaries for
+> Windows, macOS (Intel + Apple Silicon), and Linux automatically -- see
+> [What's implemented so far](#whats-implemented-so-far) for the full picture.
 
 **New to Go?** See [GO_PRIMER.md](GO_PRIMER.md) — a concept map from what you already
 know from the Node version of this project (JavaScript) to Go, plus pointers to where
@@ -39,9 +38,32 @@ single machine with zero extra tooling (`GOOS=windows go build`, no toolchain ju
 
 | Scenario | What you need |
 |---|---|
-| Building/running from source (current state) | [Go](https://go.dev) 1.26+ installed, and outbound internet access to `api.osv.dev` (the vulnerability lookup) |
-| Scanning a project with a Gradle build | Also needs Java installed (for Gradle itself) — only when the target project actually has a `build.gradle`/`.kts`; irrelevant otherwise |
-| Running a prebuilt binary (planned, not yet published) | Nothing. That's the point. |
+| Running a prebuilt binary | Nothing. That's the point -- see [Installing a prebuilt binary](#installing-a-prebuilt-binary). |
+| Building/running from source | [Go](https://go.dev) 1.26+ installed |
+| Either way | Outbound internet access to `api.osv.dev` (the vulnerability lookup), always. Also needs Java installed (for Gradle itself), but only when the target project actually has a `build.gradle`/`.kts` -- irrelevant otherwise. |
+
+## Installing a prebuilt binary
+
+Every tag matching `v*.*.*` triggers [`.github/workflows/release.yml`](.github/workflows/release.yml),
+which cross-compiles this project for every supported OS/architecture and publishes the
+binaries to that tag's [GitHub Release](https://github.com/jjuhric/cvetrace-go/releases) --
+no `go` toolchain, no Node, nothing installed on the machine that ends up running it.
+
+1. Download the binary matching your OS/architecture from the
+   [latest release](https://github.com/jjuhric/cvetrace-go/releases/latest):
+   `cvetrace-windows-amd64.exe`, `cvetrace-darwin-amd64`, `cvetrace-darwin-arm64`,
+   `cvetrace-linux-amd64`, or `cvetrace-linux-arm64`.
+2. On macOS/Linux, mark it executable: `chmod +x cvetrace-*`
+3. Run it directly: `./cvetrace-darwin-arm64 scan <path-to-project>` (or just
+   `cvetrace-windows-amd64.exe scan <path-to-project>` on Windows).
+
+Each release also publishes a `checksums.txt` (SHA-256) alongside the binaries, so you
+can verify a download before running it: `sha256sum -c checksums.txt` (or compare
+manually against the file you downloaded).
+
+`cvetrace --version` reports the exact release a downloaded binary came from -- see
+`Version` in [`internal/cli/cli.go`](internal/cli/cli.go) for how the release workflow
+bakes that in at build time.
 
 ## Usage
 
@@ -159,10 +181,10 @@ but are never silently discarded — run with `--json` to see the full `ignored`
 | `priorityScore` / `priorityLabel` | number / `P1`-`P4` | A single sortable triage ranking combining severity, `usageContext`, `codeReference`, and a small `updateImpact` bonus -- see `ComputePriority`'s doc comment in `internal/trace/priority.go` for the exact formula and, importantly, what it isn't (an authoritative risk score). This is the terminal report's actual sort order and the `[P#]` prefix on each line. |
 
 Every field from the Node version's "remediation intelligence" set now exists in this
-port. What's left is the release pipeline -- see
-[What's implemented so far](#whats-implemented-so-far). The Node version
-(`jjuhric/cvetrace`) remains the reference for exact behavior; this project is about
-porting it to Go faithfully, not reinventing it.
+port -- see [What's implemented so far](#whats-implemented-so-far) for the full
+ecosystem-by-ecosystem picture. The Node version (`jjuhric/cvetrace`) remains the
+reference for exact behavior; this project is about porting it to Go faithfully, not
+reinventing it.
 
 ## What's implemented so far
 
@@ -198,6 +220,18 @@ projects prove correctness against the exact same known vulnerabilities. The Gra
 fixture includes a real, committed Gradle wrapper so its test exercises actual Gradle
 invocation, not just the static-parsing fallback — expect that particular test to be the
 slowest in the suite (Gradle daemon/dependency-cache startup).
+
+### Cutting a release
+
+Push a tag matching `v*.*.*` and [`.github/workflows/release.yml`](.github/workflows/release.yml)
+takes it from there -- runs the full test suite as a gate, cross-compiles for every
+supported OS/architecture with the tag baked in as `cvetrace --version`'s output, and
+publishes the binaries plus a `checksums.txt` to that tag's GitHub Release:
+
+```sh
+git tag v1.2.3
+git push origin v1.2.3
+```
 
 ## Project layout
 

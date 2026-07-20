@@ -237,6 +237,16 @@ Node installed.
   the one you're building on — no extra toolchain, no Docker, no building on each target
   OS separately, which is a big part of why Go was picked for this over C/C++.
 
+[`.github/workflows/release.yml`](.github/workflows/release.yml) is exactly this last
+point put into practice: one GitHub Actions job, running on one OS (`ubuntu-latest`),
+cross-compiles binaries for Windows, macOS (both Intel and Apple Silicon), and Linux,
+just by looping `GOOS`/`GOARCH` combinations through `go build` -- no macOS/Windows
+runners needed just to produce a macOS/Windows binary. It also injects the release's
+version into the binary with `-ldflags "-X path/to/pkg.Var=value"` -- see `Version` in
+[`internal/cli/cli.go`](internal/cli/cli.go) for exactly how that works (it's a linker
+trick, not a normal Go assignment, and only works on package-level `var string`, not
+`const`).
+
 ## A real gotcha this project hit: flag ordering
 
 Go's standard `flag` package stops looking for flags at the *first* non-flag
