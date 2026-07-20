@@ -44,7 +44,7 @@ var effortBonus = map[string]float64{
 // from: a heuristic aid for working through a pile of findings top-down, not
 // a verdict on any single one.
 func ComputePriority(v Vulnerability) (priorityScore float64, priorityLabel string) {
-	severityWeight := float64(severityRank[v.Severity])
+	severityWeight := float64(SeverityRank[v.Severity])
 
 	ctxMult, ok := contextMultiplier[v.UsageContext]
 	if !ok {

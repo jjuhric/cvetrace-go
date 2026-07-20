@@ -7,15 +7,15 @@ nothing to install to run it, unlike the Node.js original (which needs Node
 installed) or a compiled-JS approach like Bun (which bundles a whole JS runtime
 into the binary, making it much larger).
 
-> **Status: early slice.** This is one of several planned increments — see
-> [What's implemented so far](#whats-implemented-so-far). Node, Java/Maven, Java/Gradle,
+> **Status: feature-complete, no release pipeline yet.** Node, Java/Maven, Java/Gradle,
 > and Python are all detected now (Gradle by actually invoking the target project's own
-> Gradle wrapper, same as the Node version), and every finding is tagged with the Node
-> version's full "remediation intelligence" field set: `dependencyScope`/`usageContext`/
+> Gradle wrapper, same as the Node version), every finding is tagged with the Node
+> version's full "remediation intelligence" field set (`dependencyScope`/`usageContext`/
 > `dependencyPath`/`codeReference`/`updateImpact`/`recommendedVersion`/
-> `advisoryDetails`/`remediationTier`/`overrideSnippet`/`priorityScore`/`priorityLabel`.
-> What's left is `--fail-on`/`--exclude`/`--ignore` CLI flags and a release pipeline
-> publishing downloadable binaries — for now this is run from source (see
+> `advisoryDetails`/`remediationTier`/`overrideSnippet`/`priorityScore`/`priorityLabel`),
+> and `--fail-on`/`--exclude`/`--ignore` plus a `.cvetraceignore` file all work -- see
+> [What's implemented so far](#whats-implemented-so-far). What's left is a release
+> pipeline publishing downloadable binaries — for now this is run from source (see
 > [Usage](#usage)); prebuilt, zero-install binaries are the whole point of doing this in
 > Go, and are a planned near-term addition.
 
@@ -48,14 +48,14 @@ single machine with zero extra tooling (`GOOS=windows go build`, no toolchain ju
 ```sh
 git clone https://github.com/jjuhric/cvetrace-go
 cd cvetrace-go
-go run ./cmd/cvetrace scan <path-to-project> [--json]
+go run ./cmd/cvetrace scan <path-to-project> [options]
 ```
 
 Or build a binary once and reuse it:
 
 ```sh
 go build -o cvetrace ./cmd/cvetrace
-./cvetrace scan <path-to-project> [--json]
+./cvetrace scan <path-to-project> [options]
 ```
 
 - `<path-to-project>` — directory to scan. Detects Node (`package.json`/
@@ -64,13 +64,46 @@ go build -o cvetrace ./cmd/cvetrace
   (`Pipfile.lock`/`requirements.txt`/`pyproject.toml`) — see
   [What's implemented so far](#whats-implemented-so-far) for exactly what's covered.
 - `--json` — emit a machine-readable JSON report instead of the terminal report.
+- `--fail-on <severity>` — exit non-zero if a vulnerability at or above this severity is
+  found (`low`, `moderate`/`medium`, `high`, `critical`) — the flag a CI pipeline gates
+  on. Ignored findings never count toward this.
+- `--exclude <glob>` — glob pattern (relative to `<path-to-project>`), e.g. `'test/**'`,
+  to skip during both dependency discovery and code-usage scanning — repeatable.
+- `--ignore <id>` — dismiss a specific CVE/GHSA/etc. id for this run — repeatable. For a
+  permanent dismissal, add a `.cvetraceignore` file to the scanned directory instead
+  (see [Ignoring findings](#ignoring-findings)).
+
+Run `cvetrace scan -h` for the full option reference (examples, exit status, and a
+description of every report field).
 
 **Go note:** unlike the Node version's CLI (built on commander.js, which accepts flags
 anywhere), Go's standard `flag` package normally requires flags to come *before* any
 positional argument. This project works around that (see `internal/cli/cli.go`'s
-`reorderFlagsFirst`), so `cvetrace scan <path> --json` works the same way the Node
-version's does — but it's exactly the kind of gotcha worth knowing about if you look at
-the code. More detail in [GO_PRIMER.md](GO_PRIMER.md).
+`reorderFlagsFirst`), so `cvetrace scan <path> --json` and
+`cvetrace scan <path> --exclude test/**` both work the same way the Node version's does
+— but it's exactly the kind of gotcha worth knowing about if you look at the code. More
+detail in [GO_PRIMER.md](GO_PRIMER.md).
+
+## Ignoring findings
+
+Two ways to dismiss a reviewed-and-accepted finding so it stops showing up (mirrors
+Nexus IQ/Dependabot's "dismiss"):
+
+- `--ignore <id>` — one-off, this run only.
+- A `.cvetraceignore` file in the directory being scanned — permanent: one CVE/GHSA/etc.
+  id per line, blank lines and full-line `#` comments ignored, an optional trailing
+  `# reason` captured for the record.
+
+```
+# .cvetraceignore
+CVE-2021-1234                      # no reason given
+CVE-2021-5678 # reviewed, false positive in our usage
+```
+
+Ignored findings are dropped from the main report and don't count toward `--fail-on`,
+but are never silently discarded — run with `--json` to see the full `ignored` array
+(id, reason, and which mechanism -- `.cvetraceignore` or `--ignore` -- matched). See
+`internal/trace/ignore.go`.
 
 ## How it works
 
@@ -106,7 +139,9 @@ the code. More detail in [GO_PRIMER.md](GO_PRIMER.md).
    `severity` so e.g. "severity: CRITICAL, priority: P4" (a critical CVE in dev-only code
    never referenced in your own source) reads as a sensible triage call, not a
    contradiction.
-6. **Report** (`internal/report`) — a colorized terminal report, or `--json`.
+6. **Ignore filtering** (`internal/trace/ignore.go`) — merges `.cvetraceignore` with
+   `--ignore` values and splits findings into kept/ignored, right before reporting.
+7. **Report** (`internal/report`) — a colorized terminal report, or `--json`.
 
 ## Fields on each finding
 
@@ -124,10 +159,10 @@ the code. More detail in [GO_PRIMER.md](GO_PRIMER.md).
 | `priorityScore` / `priorityLabel` | number / `P1`-`P4` | A single sortable triage ranking combining severity, `usageContext`, `codeReference`, and a small `updateImpact` bonus -- see `ComputePriority`'s doc comment in `internal/trace/priority.go` for the exact formula and, importantly, what it isn't (an authoritative risk score). This is the terminal report's actual sort order and the `[P#]` prefix on each line. |
 
 Every field from the Node version's "remediation intelligence" set now exists in this
-port. What's left is `--fail-on`/`--exclude`/`--ignore` CLI flags, richer `--help` text,
-and the release pipeline -- see [What's implemented so far](#whats-implemented-so-far).
-The Node version (`jjuhric/cvetrace`) remains the reference for exact behavior; this
-project is about porting it to Go faithfully, not reinventing it.
+port. What's left is the release pipeline -- see
+[What's implemented so far](#whats-implemented-so-far). The Node version
+(`jjuhric/cvetrace`) remains the reference for exact behavior; this project is about
+porting it to Go faithfully, not reinventing it.
 
 ## What's implemented so far
 

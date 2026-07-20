@@ -81,10 +81,12 @@ type Vulnerability struct {
 	CodeReference string `json:"codeReference"`
 }
 
-// severityRank lets severities be compared/sorted, higher is worse. OSV.dev
-// advisories sourced from GitHub Security Advisories carry this label
-// (database_specific.severity) rather than always a parseable CVSS score.
-var severityRank = map[string]int{
+// SeverityRank lets severities be compared/sorted, higher is worse, and is
+// also how --fail-on's threshold check (see internal/cli) turns a severity
+// name into a comparable number. OSV.dev advisories sourced from GitHub
+// Security Advisories carry this label (database_specific.severity) rather
+// than always a parseable CVSS score.
+var SeverityRank = map[string]int{
 	"LOW":      1,
 	"MODERATE": 2,
 	"MEDIUM":   2,
@@ -135,7 +137,7 @@ func Resolve(deps []discover.Dependency) ([]Vulnerability, error) {
 	// compare equal (same severity here) keep their original relative
 	// order, rather than being shuffled arbitrarily.
 	sort.SliceStable(vulns, func(i, j int) bool {
-		return severityRank[vulns[i].Severity] > severityRank[vulns[j].Severity]
+		return SeverityRank[vulns[i].Severity] > SeverityRank[vulns[j].Severity]
 	})
 
 	return vulns, nil

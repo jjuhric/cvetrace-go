@@ -76,9 +76,10 @@ var priorityColor = map[string]string{
 // -- priority mixes findings across manifests deliberately, so this is no
 // longer grouped by manifest file; each line names its own manifest instead.
 // Meant to be worked top-down.
-func PrintTerminal(vulns []trace.Vulnerability) {
+func PrintTerminal(vulns []trace.Vulnerability, ignored []trace.IgnoredVulnerability) {
 	if len(vulns) == 0 {
 		fmt.Println(colorGray + "No known vulnerabilities found." + colorReset)
+		printIgnoredFooter(ignored)
 		return
 	}
 
@@ -139,6 +140,19 @@ func PrintTerminal(vulns []trace.Vulnerability) {
 		noun = "vulnerability"
 	}
 	fmt.Printf("%s%d %s found.%s\n", colorBold, len(vulns), noun, colorReset)
+	printIgnoredFooter(ignored)
+}
+
+func printIgnoredFooter(ignored []trace.IgnoredVulnerability) {
+	if len(ignored) == 0 {
+		return
+	}
+	noun := "findings"
+	if len(ignored) == 1 {
+		noun = "finding"
+	}
+	fmt.Printf("%s%d %s suppressed via .cvetraceignore/--ignore — see --json for details.%s\n",
+		colorGray, len(ignored), noun, colorReset)
 }
 
 // preferredLabel picks the CVE-* alias to display if the advisory has one

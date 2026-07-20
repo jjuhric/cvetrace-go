@@ -41,7 +41,9 @@ var pythonManifestNames = map[string]struct{}{
 // requirements.txt/pyproject.toml). Full transitive resolution for Java's
 // Maven support and for Python is a planned future addition, not
 // implemented yet -- see the project README. Directories listed in
-// skipDirs are never descended into.
+// skipDirs, and any directory matching one of excludes (--exclude glob
+// patterns, matched against its path relative to root -- see glob.go), are
+// never descended into.
 //
 // Go note: functions that can fail return an error as their *last* return
 // value, instead of throwing an exception the way JS's try/catch expects.
@@ -49,7 +51,8 @@ var pythonManifestNames = map[string]struct{}{
 // fail -- there's no way to silently ignore an error the way a missing catch
 // block in JS would swallow one; you have to explicitly decide to ignore it
 // (by assigning it to "_") if that's really what you want.
-func Walk(root string) ([]Dependency, error) {
+func Walk(root string, excludes []string) ([]Dependency, error) {
+	isExcluded := NewExcludeMatcher(excludes)
 	var deps []Dependency
 
 	// Go note: a directory can have more than one Python manifest present
@@ -79,6 +82,12 @@ func Walk(root string) ([]Dependency, error) {
 		if d.IsDir() {
 			if _, shouldSkip := skipDirs[d.Name()]; shouldSkip && path != root {
 				return filepath.SkipDir
+			}
+			if path != root {
+				relPath, relErr := filepath.Rel(root, path)
+				if relErr == nil && isExcluded(relPath) {
+					return filepath.SkipDir
+				}
 			}
 			return nil
 		}

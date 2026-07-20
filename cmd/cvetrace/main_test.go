@@ -161,3 +161,123 @@ func TestScanWalksAMixedDirectoryAndFindsAllFourEcosystems(t *testing.T) {
 			len(manifests), manifests)
 	}
 }
+
+// TestScanExcludeSkipsAMatchingDirectory runs the real CLI with --exclude
+// against the mixed fixtures directory and confirms PyPI findings disappear
+// once python-fixture-project/** is excluded, while the other ecosystems'
+// findings are unaffected.
+func TestScanExcludeSkipsAMatchingDirectory(t *testing.T) {
+	fixturesDir := filepath.Join("..", "..", "test", "fixtures")
+
+	cmd := exec.Command("go", "run", ".", "scan", fixturesDir, "--exclude", "python-fixture-project/**", "--json")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("cvetrace scan --exclude failed: %v\noutput:\n%s", err, out)
+	}
+
+	output := string(out)
+	if strings.Contains(output, `"ecosystem": "PyPI"`) {
+		t.Errorf("expected no PyPI findings once python-fixture-project/** is excluded, got:\n%s", output)
+	}
+	if !strings.Contains(output, `"ecosystem": "npm"`) {
+		t.Errorf("expected npm findings to still be present (not excluded), got:\n%s", output)
+	}
+}
+
+// TestScanIgnoreDismissesASpecificFinding runs the real CLI with --ignore
+// against the Node fixture (which has two known CVEs for minimist) and
+// confirms the ignored one is dropped from vulnerabilities but still
+// recorded in the JSON output's ignored array for audit purposes.
+func TestScanIgnoreDismissesASpecificFinding(t *testing.T) {
+	fixture := filepath.Join("..", "..", "test", "fixtures", "node-fixture-project")
+
+	cmd := exec.Command("go", "run", ".", "scan", fixture, "--ignore", "CVE-2021-44906", "--json")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("cvetrace scan --ignore failed: %v\noutput:\n%s", err, out)
+	}
+
+	var report struct {
+		Vulnerabilities []struct {
+			Aliases []string `json:"aliases"`
+		} `json:"vulnerabilities"`
+		IgnoredCount int `json:"ignoredCount"`
+		Ignored      []struct {
+			Aliases       []string `json:"aliases"`
+			IgnoredVia    string   `json:"ignoredVia"`
+			IgnoredReason string   `json:"ignoredReason"`
+		} `json:"ignored"`
+	}
+	if err := json.Unmarshal(out, &report); err != nil {
+		t.Fatalf("could not parse output as JSON: %v\noutput:\n%s", err, out)
+	}
+
+	for _, v := range report.Vulnerabilities {
+		for _, alias := range v.Aliases {
+			if alias == "CVE-2021-44906" {
+				t.Errorf("expected CVE-2021-44906 to be dropped from vulnerabilities, still present:\n%s", out)
+			}
+		}
+	}
+	if report.IgnoredCount != 1 || len(report.Ignored) != 1 {
+		t.Fatalf("expected exactly 1 ignored finding, got ignoredCount=%d len(ignored)=%d:\n%s",
+			report.IgnoredCount, len(report.Ignored), out)
+	}
+	if report.Ignored[0].IgnoredVia != "--ignore" {
+		t.Errorf("got ignoredVia %q, want %q", report.Ignored[0].IgnoredVia, "--ignore")
+	}
+}
+
+// TestScanFailOnSetsExitCodeOneWhenThresholdIsMet runs the real CLI with
+// --fail-on against the Node fixture, which has a CRITICAL CVE -- confirms
+// the process exits 1, the real signal a CI pipeline gates on.
+func TestScanFailOnSetsExitCodeOneWhenThresholdIsMet(t *testing.T) {
+	fixture := filepath.Join("..", "..", "test", "fixtures", "node-fixture-project")
+
+	cmd := exec.Command("go", "run", ".", "scan", fixture, "--fail-on", "critical")
+	out, err := cmd.CombinedOutput()
+
+	exitErr, ok := err.(*exec.ExitError)
+	if !ok {
+		t.Fatalf("expected the process to exit non-zero (a CRITICAL CVE is present), got err=%v\noutput:\n%s", err, out)
+	}
+	if exitErr.ExitCode() != 1 {
+		t.Errorf("got exit code %d, want 1\noutput:\n%s", exitErr.ExitCode(), out)
+	}
+}
+
+// TestScanFailOnSetsExitCodeZeroWhenThresholdIsNotMet is the mirror check:
+// once the fixture's only CRITICAL finding is dismissed via --ignore, the
+// remaining MODERATE finding no longer meets a "critical" --fail-on
+// threshold, so the process should exit 0 -- and, just as importantly,
+// ignored findings must never count toward --fail-on themselves.
+func TestScanFailOnSetsExitCodeZeroWhenThresholdIsNotMet(t *testing.T) {
+	fixture := filepath.Join("..", "..", "test", "fixtures", "node-fixture-project")
+
+	cmd := exec.Command("go", "run", ".", "scan", fixture, "--ignore", "CVE-2021-44906", "--fail-on", "critical")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("expected exit 0 once the only CRITICAL finding is ignored, got err=%v\noutput:\n%s", err, out)
+	}
+}
+
+// TestScanFailOnRejectsAnUnknownSeverity confirms an unrecognized --fail-on
+// value is a hard error (exit 1 with a message), not a silently-ignored
+// no-op that would defeat the point of a CI gate.
+func TestScanFailOnRejectsAnUnknownSeverity(t *testing.T) {
+	fixture := filepath.Join("..", "..", "test", "fixtures", "node-fixture-project")
+
+	cmd := exec.Command("go", "run", ".", "scan", fixture, "--fail-on", "not-a-real-severity")
+	out, err := cmd.CombinedOutput()
+
+	exitErr, ok := err.(*exec.ExitError)
+	if !ok {
+		t.Fatalf("expected the process to exit non-zero for an unrecognized --fail-on value, got err=%v\noutput:\n%s", err, out)
+	}
+	if exitErr.ExitCode() != 1 {
+		t.Errorf("got exit code %d, want 1\noutput:\n%s", exitErr.ExitCode(), out)
+	}
+	if !strings.Contains(string(out), "unknown --fail-on severity") {
+		t.Errorf("expected an explanatory error message, got:\n%s", out)
+	}
+}

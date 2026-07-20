@@ -13,7 +13,7 @@ func TestDetectCodeReferencesFindsAnNpmRequire(t *testing.T) {
 	}
 
 	vulns := []Vulnerability{{Ecosystem: "npm", Name: "minimist"}}
-	got, err := DetectCodeReferences(dir, vulns)
+	got, err := DetectCodeReferences(dir, vulns, nil)
 	if err != nil {
 		t.Fatalf("DetectCodeReferences returned an error: %v", err)
 	}
@@ -29,7 +29,7 @@ func TestDetectCodeReferencesReportsNotFoundWhenNoImportExists(t *testing.T) {
 	}
 
 	vulns := []Vulnerability{{Ecosystem: "npm", Name: "minimist"}}
-	got, err := DetectCodeReferences(dir, vulns)
+	got, err := DetectCodeReferences(dir, vulns, nil)
 	if err != nil {
 		t.Fatalf("DetectCodeReferences returned an error: %v", err)
 	}
@@ -45,7 +45,7 @@ func TestDetectCodeReferencesReportsUnknownWhenNoRelevantSourceFiles(t *testing.
 	}
 
 	vulns := []Vulnerability{{Ecosystem: "npm", Name: "minimist"}}
-	got, err := DetectCodeReferences(dir, vulns)
+	got, err := DetectCodeReferences(dir, vulns, nil)
 	if err != nil {
 		t.Fatalf("DetectCodeReferences returned an error: %v", err)
 	}
@@ -62,7 +62,7 @@ func TestDetectCodeReferencesMavenChecksGroupIDImport(t *testing.T) {
 	}
 
 	vulns := []Vulnerability{{Ecosystem: "Maven", Name: "org.apache.logging.log4j:log4j-core"}}
-	got, err := DetectCodeReferences(dir, vulns)
+	got, err := DetectCodeReferences(dir, vulns, nil)
 	if err != nil {
 		t.Fatalf("DetectCodeReferences returned an error: %v", err)
 	}
@@ -78,7 +78,7 @@ func TestDetectCodeReferencesPythonChecksImportStatement(t *testing.T) {
 	}
 
 	vulns := []Vulnerability{{Ecosystem: "PyPI", Name: "yaml"}}
-	got, err := DetectCodeReferences(dir, vulns)
+	got, err := DetectCodeReferences(dir, vulns, nil)
 	if err != nil {
 		t.Fatalf("DetectCodeReferences returned an error: %v", err)
 	}
@@ -101,7 +101,7 @@ func TestDetectCodeReferencesSkipsIgnoredDirectories(t *testing.T) {
 	}
 
 	vulns := []Vulnerability{{Ecosystem: "npm", Name: "minimist"}}
-	got, err := DetectCodeReferences(dir, vulns)
+	got, err := DetectCodeReferences(dir, vulns, nil)
 	if err != nil {
 		t.Fatalf("DetectCodeReferences returned an error: %v", err)
 	}

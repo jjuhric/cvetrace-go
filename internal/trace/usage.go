@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/jjuhric/cvetrace-go/internal/discover"
 )
 
 // usageSkipDirs mirrors internal/discover's own skipDirs -- duplicated here
@@ -54,8 +56,10 @@ var extensionsByEcosystem = map[string][]string{
 // guaranteed). Python detection checks for the PyPI distribution name
 // directly, which misses packages whose import name differs from their
 // published name (e.g. PyYAML is `import yaml`) -- a known, documented gap,
-// not silently "handled".
-func DetectCodeReferences(targetPath string, vulns []Vulnerability) ([]Vulnerability, error) {
+// not silently "handled". excludes are the same --exclude glob patterns
+// passed to discover.Walk, applied here too so a directory tree excluded
+// from dependency discovery is also excluded from usage scanning.
+func DetectCodeReferences(targetPath string, vulns []Vulnerability, excludes []string) ([]Vulnerability, error) {
 	ecosystems := make(map[string]bool)
 	relevantExtensions := make(map[string]bool)
 	for _, v := range vulns {
@@ -67,7 +71,7 @@ func DetectCodeReferences(targetPath string, vulns []Vulnerability) ([]Vulnerabi
 
 	filesByEcosystem := make(map[string][]string, len(ecosystems))
 	if len(relevantExtensions) > 0 {
-		collected, err := walkSource(targetPath, relevantExtensions)
+		collected, err := walkSource(targetPath, relevantExtensions, excludes)
 		if err != nil {
 			return nil, err
 		}
@@ -103,7 +107,8 @@ type sourceFile struct {
 // subdirectory should be able to abort the whole scan over -- so a per-entry
 // error here is skipped rather than propagated, matching the Node version's
 // own try/catch-and-continue in walkSource.
-func walkSource(root string, relevantExtensions map[string]bool) ([]sourceFile, error) {
+func walkSource(root string, relevantExtensions map[string]bool, excludes []string) ([]sourceFile, error) {
+	isExcluded := discover.NewExcludeMatcher(excludes)
 	var files []sourceFile
 
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
@@ -114,6 +119,11 @@ func walkSource(root string, relevantExtensions map[string]bool) ([]sourceFile, 
 		if d.IsDir() {
 			if usageSkipDirs[d.Name()] && path != root {
 				return filepath.SkipDir
+			}
+			if path != root {
+				if relPath, relErr := filepath.Rel(root, path); relErr == nil && isExcluded(relPath) {
+					return filepath.SkipDir
+				}
 			}
 			return nil
 		}

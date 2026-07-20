@@ -251,6 +251,50 @@ rearranging arguments (flags first, positionals after) before handing them to
 directly — it's exactly the kind of thing worth a regression test, since it's easy to
 silently break again.
 
+Adding `--exclude`/`--ignore`/`--fail-on` made this gotcha sharper: `--fail-on critical`
+is *two* tokens (the flag, then its value, space-separated) rather than one self-
+contained token like `--json`. `reorderFlagsFirst` now needs to know which flag names
+take a following value (`flagsWithValue`, a `map[string]bool`) so it can move both
+tokens together as a pair, instead of leaving the value token behind in the positional
+group. This is why the function grew a lookup table instead of staying a one-line
+"does this start with a dash" filter — a small, concrete example of how a simple hand-
+rolled parser accumulates special cases as a CLI's surface area grows, which is exactly
+the kind of thing a real argument-parsing library (commander.js on the Node side) exists
+to handle so every project doesn't reinvent it slightly differently.
+
+## Repeatable flags: implementing `flag.Value`
+
+**JS (this project's Node version):** commander.js supports a flag being passed more
+than once via an accumulator function: `.option("--exclude <glob>", "...", (value,
+previous = []) => previous.concat([value]))`, called once per occurrence.
+
+**Go:** the standard `flag` package has no built-in "repeatable" flag type (no
+`flag.StringSlice` the way `flag.String`/`flag.Bool` exist) -- instead, *any* type that
+implements the two-method `flag.Value` interface can be registered as a flag's backing
+storage via `fs.Var`, and `Set` is called once per occurrence on the command line. See
+`stringSliceFlag` in [`internal/cli/cli.go`](internal/cli/cli.go):
+
+```go
+type stringSliceFlag []string
+
+func (s *stringSliceFlag) String() string { return strings.Join(*s, ",") }
+func (s *stringSliceFlag) Set(value string) error {
+    *s = append(*s, value)
+    return nil
+}
+```
+
+`fs.Var(&excludes, "exclude", "...")` registers it; every `--exclude <glob>` on the
+command line calls `Set` again, appending. This is a small but genuine example of Go's
+interface system: `flag.Value` isn't a type you inherit from or declare conformance to
+(there's no `implements` keyword) -- any type that happens to have both methods with
+the right signatures satisfies the interface automatically, and `fs.Var` accepts
+anything satisfying it. The pointer receiver (`*stringSliceFlag`, not `stringSliceFlag`)
+matters here: `Set` needs to modify the slice `fs.Var` was given, and only a pointer
+receiver lets a method mutate the value it was called on, the same reason `Append` in
+JS mutates an array in place while a value-typed language might otherwise hand back a
+copy.
+
 ## Where to look next
 
 Read the packages in this order — it mirrors the actual pipeline (discover → trace →
@@ -268,34 +312,46 @@ report) and each one builds on the last:
    the `,any` catch-all technique for `<properties>`'s arbitrarily-named children.
 4. [`internal/discover/python.go`](internal/discover/python.go) — regexp-based
    best-effort parsing, and the `readIfExists` helper's `(value, ok, error)` pattern.
-5. [`internal/discover/gradle.go`](internal/discover/gradle.go) — the most involved
+5. [`internal/discover/glob.go`](internal/discover/glob.go) — a small, self-contained
+   glob-to-regexp compiler for `--exclude` patterns, worth reading as its own thing
+   before it shows up inside `discover.go` and `usage.go` below. Runs on a `[]rune`
+   rather than the raw string, worth a look for why (see its doc comment).
+6. [`internal/discover/gradle.go`](internal/discover/gradle.go) — the most involved
    discoverer: actually running a subprocess (the target project's own Gradle wrapper)
    with a timeout, rather than just parsing a file. See
    [Running another program and giving up on it if it hangs](#running-another-program-and-giving-up-on-it-if-it-hangs)
    above before this one.
-6. [`internal/discover/discover.go`](internal/discover/discover.go) — how all four
-   discoverers above get dispatched during a single directory walk.
-7. [`internal/trace/osv.go`](internal/trace/osv.go) — an HTTP client using only the
+7. [`internal/discover/discover.go`](internal/discover/discover.go) — how all four
+   discoverers above get dispatched during a single directory walk, including where
+   `glob.go`'s exclude matcher plugs in.
+8. [`internal/trace/osv.go`](internal/trace/osv.go) — an HTTP client using only the
    standard library, more JSON structs.
-8. [`internal/trace/resolve.go`](internal/trace/resolve.go) — the most involved file;
+9. [`internal/trace/resolve.go`](internal/trace/resolve.go) — the most involved file;
    read its doc comments carefully, especially `minimumFixedVersion` and `dedupeByCVE`
    (both fix real bugs found while building this project, documented right where the
    fix lives), plus `classifyVersionJump`/`classifyRemediationTier`/
    `addRecommendedVersions` -- small, independently testable classifier functions that
    are a good example of Go's habit of writing many single-purpose, easy-to-unit-test
    functions rather than one larger one.
-9. [`internal/trace/usage.go`](internal/trace/usage.go) — a second `filepath.WalkDir`
-   pass (this time over source files, not manifests) plus `regexp.QuoteMeta` for
-   building a regex safely from an arbitrary package name.
-10. [`internal/trace/override.go`](internal/trace/override.go) — the smallest of the
+10. [`internal/trace/usage.go`](internal/trace/usage.go) — a second `filepath.WalkDir`
+    pass (this time over source files, not manifests) plus `regexp.QuoteMeta` for
+    building a regex safely from an arbitrary package name.
+11. [`internal/trace/override.go`](internal/trace/override.go) — the smallest of the
     trace files: mostly string-building, plus `strings.Cut(coordinate, ":")` (Go's
     built-in "split into at most two pieces around the first separator," the same job
     JS's `coordinate.split(":")` followed by taking `[0]`/`[1]` does, without building an
     intermediate array just to throw most of it away) and a composite-literal-elision
     example worth its own look in `npmOverride`.
-11. [`internal/trace/priority.go`](internal/trace/priority.go) — a short, pure
+12. [`internal/trace/priority.go`](internal/trace/priority.go) — a short, pure
     calculation with no I/O at all, and `math.Round(x*100)/100` for rounding to two
     decimal places (Go's `math` package has no built-in "round to N decimals" the way
     some languages do).
-12. [`internal/cli/cli.go`](internal/cli/cli.go) — how it all gets wired into a runnable
-    command.
+13. [`internal/trace/ignore.go`](internal/trace/ignore.go) — struct embedding
+    (`IgnoredVulnerability` embeds `Vulnerability`), the closest Go equivalent to JS's
+    object-spread `{ ...finding, extraField }` -- see its doc comment for how
+    encoding/json flattens an embedded struct's fields into the outer JSON object.
+14. [`internal/cli/cli.go`](internal/cli/cli.go) — how it all gets wired into a runnable
+    command, including `stringSliceFlag`'s `flag.Value` implementation for
+    `--exclude`/`--ignore` (see
+    [Repeatable flags: implementing flag.Value](#repeatable-flags-implementing-flagvalue)
+    above) and the extended `reorderFlagsFirst` for flags that take a value.
