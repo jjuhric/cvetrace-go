@@ -127,6 +127,45 @@ but are never silently discarded — run with `--json` to see the full `ignored`
 (id, reason, and which mechanism -- `.cvetraceignore` or `--ignore` -- matched). See
 `internal/trace/ignore.go`.
 
+## Recommended agent workflow
+
+Both a human and an AI coding agent are meant to run cvetrace-go the same way —
+`cvetrace scan <path> --json` — but an agent (GitHub Copilot, Claude Code/Cowork,
+Gemini Antigravity, etc.) working inside a project's IDE can go further and act on the
+report directly. The intended loop:
+
+1. Run `cvetrace scan . --json` (add `--exclude`/`--ignore`/`--fail-on` as appropriate)
+   and read the `vulnerabilities` array — already sorted by `priorityScore`, highest
+   first. Work through it in that order.
+2. For each finding, branch on `remediationTier`:
+   - **`safe-to-update`** — apply it directly. Bump the package to `recommendedVersion`
+     (or `fixedVersion`, to resolve only this one CVE) in the file named by
+     `manifestPath`, or — if `dependencyScope` is `transitive` — apply `overrideSnippet`
+     instead (it names the exact file and gives the exact snippet: npm `overrides`,
+     Gradle `resolutionStrategy.force`, or Maven `dependencyManagement`). Then run the
+     project's own install/build/test step to confirm nothing broke, and re-run
+     `cvetrace scan` to confirm the finding is gone before moving to the next one.
+   - **`needs-approval`** — don't change anything yet. Summarize the finding (package,
+     current → target version, why it's a major/breaking bump) and propose a short
+     implementation plan — what files change, what could break, how you'll verify it —
+     then wait for the user to explicitly approve before touching any code.
+   - **`no-fix-available`** — there's no version bump that resolves this yet. Read
+     `advisoryDetails` for a mitigation/workaround (e.g. a config flag) and propose
+     that instead, or just flag it for the user's awareness if no workaround exists.
+   - **`unknown-impact`** — treat the same as `needs-approval`: cvetrace couldn't
+     confirm the size of the version jump, so don't assume it's safe.
+3. When reporting back, use `priorityScore`/`priorityLabel`, `usageContext`, and
+   `codeReference` to explain *why* something ranks where it does — e.g. "this CRITICAL
+   CVE is P4 because it's a dev-only dependency with no code reference found."
+4. If the user says to skip a finding, record that decision instead of just not
+   mentioning it next time: add its id to a `.cvetraceignore` file in the project
+   (with a `# reason` noting who decided and why).
+
+This is a description of the intended workflow, not something cvetrace-go enforces on
+its own — copy it (or adapt it) into your own project's agent instructions file
+(`CLAUDE.md`, `AGENTS.md`, `.github/copilot-instructions.md`, etc.) if you want an agent
+working in that project to follow it automatically.
+
 ## How it works
 
 1. **Discover** (`internal/discover`) — walk the target directory, skip

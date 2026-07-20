@@ -35,7 +35,7 @@ logic packages are explicitly *not* a public library for other projects to depen
 easy to forget to catch something.
 
 **Go:** a function that can fail returns an `error` as its *last* return value —
-`func Walk(root string) ([]Dependency, error)` in
+`func Walk(root string, excludes []string) ([]Dependency, error)` in
 [`internal/discover/discover.go`](internal/discover/discover.go). There's no
 `try`/`catch`. Instead:
 
@@ -62,8 +62,9 @@ Go's equivalent of `throw new Error(...)`, except it's *returned*, never thrown.
 
 **Go:** a `struct` declares its exact shape up front — see `Dependency` in
 [`internal/discover/types.go`](internal/discover/types.go). Every `Dependency` value
-always has exactly the fields `Ecosystem`, `Name`, `Version`, `ManifestPath` — no more,
-no fewer, and the compiler checks this at every use.
+always has exactly the same fields (`Ecosystem`, `Name`, `Version`, `ManifestPath`,
+`DependencyScope`, `UsageContext`, `DependencyPath`) — no more, no fewer, and the
+compiler checks this at every use.
 
 JSON struct tags (the `` `json:"ecosystem"` `` part) tell `encoding/json` how to map
 between Go's `UpperCamelCase` field names (required to be capitalized, so they're
