@@ -89,7 +89,10 @@ the code. More detail in [GO_PRIMER.md](GO_PRIMER.md).
    see `minimumFixedVersion`'s doc comment in `internal/trace/resolve.go`), and collapse
    duplicate records OSV.dev sometimes indexes the same CVE under (another real bug,
    found this time while building *this* port -- see `dedupeByCVE`'s doc comment).
-3. **Report** (`internal/report`) — a colorized terminal report, or `--json`.
+3. **Usage detection** (`internal/trace/usage.go`) — a second, separate walk of the
+   target directory's own source files (not manifests), tagging each finding's
+   `codeReference` by regex-scanning for an import/require statement for that package.
+4. **Report** (`internal/report`) — a colorized terminal report, or `--json`.
 
 ## Fields on each finding
 
@@ -98,13 +101,13 @@ the code. More detail in [GO_PRIMER.md](GO_PRIMER.md).
 | `dependencyScope` | `direct` / `transitive` / `unknown` | Whether the vulnerable package is declared directly in your manifest, or pulled in by something else you depend on. |
 | `dependencyPath` | array or omitted | For transitive findings **in Node or Gradle** (the only ecosystems this port resolves a real dependency graph for): the chain from a direct dependency down to this package, e.g. `["webpack", "loader-utils", "vulnerable-pkg"]`. Omitted for direct dependencies, and always omitted for Maven/Python since those aren't resolved transitively at all. |
 | `usageContext` | `production` / `development` / `unknown` | Whether the package is reachable from your production dependencies, or only from dev/test/build tooling (`devDependencies`, Maven `test` scope, Gradle `testImplementation`, etc.) that never ships. |
+| `codeReference` | `found` / `not-found` / `unknown` | Whether the package is actually imported/required anywhere in your own source files, not just declared in a manifest. **This is a usage signal, not reachability analysis** -- `found` doesn't mean the specific vulnerable function is called, and `not-found` doesn't prove the code is unused (dynamic requires, reflection, etc. are missed). Java/Kotlin detection assumes the library's import matches its Maven/Gradle groupId (usually true, not guaranteed); Python detection uses the PyPI package name directly, which misses packages whose import name differs from what's published (e.g. PyYAML is `import yaml`) -- a known gap, not silently handled. See `DetectCodeReferences` in `internal/trace/usage.go`. |
 
-The rest of the Node version's "remediation intelligence" fields (`codeReference`,
-`updateImpact`, `recommendedVersion`, `overrideSnippet`, `advisoryDetails`,
-`priorityScore`/`priorityLabel`, `remediationTier`), plus `--fail-on`/`--exclude`/
-`--ignore`, are **not built yet**. The Node version (`jjuhric/cvetrace`) is the reference
-for what to build next; this project is about porting it to Go incrementally, not
-reinventing it.
+The rest of the Node version's "remediation intelligence" fields (`updateImpact`,
+`recommendedVersion`, `overrideSnippet`, `advisoryDetails`, `priorityScore`/
+`priorityLabel`, `remediationTier`), plus `--fail-on`/`--exclude`/`--ignore`, are **not
+built yet**. The Node version (`jjuhric/cvetrace`) is the reference for what to build
+next; this project is about porting it to Go incrementally, not reinventing it.
 
 ## What's implemented so far
 

@@ -169,6 +169,15 @@ malicious or just weird input can never cause catastrophic backtracking the way 
 occasionally can in JS. None of the patterns in this project needed the unsupported
 features, so this only ever helps.
 
+[`internal/trace/usage.go`](internal/trace/usage.go) (which detects whether a
+vulnerable package is actually imported anywhere in the project's own source, for the
+`codeReference` field) builds a regex *from* a package name at runtime, e.g. matching
+literally against whatever `minimist` or `org.apache.logging.log4j` happens to be.
+`regexp.QuoteMeta` escapes any regex-special characters in that string first (a `.` in
+a Maven groupId would otherwise mean "any character," not a literal dot) -- the same job
+`escapeRegExp`'s hand-written character-class replace does in the Node version's
+`src/trace/usage.js`, except the standard library already provides it in Go.
+
 ## Running another program and giving up on it if it hangs
 
 **JS (this project's Node version):** `src/discover/gradle.js` shells out to the target
@@ -272,5 +281,8 @@ report) and each one builds on the last:
    read its doc comments carefully, especially `minimumFixedVersion` and `dedupeByCVE`
    (both fix real bugs found while building this project, documented right where the
    fix lives).
-9. [`internal/cli/cli.go`](internal/cli/cli.go) — how it all gets wired into a runnable
-   command.
+9. [`internal/trace/usage.go`](internal/trace/usage.go) — a second `filepath.WalkDir`
+   pass (this time over source files, not manifests) plus `regexp.QuoteMeta` for
+   building a regex safely from an arbitrary package name.
+10. [`internal/cli/cli.go`](internal/cli/cli.go) — how it all gets wired into a runnable
+    command.

@@ -32,6 +32,12 @@ var severityColor = map[string]string{
 	"UNKNOWN":  colorGray,
 }
 
+var codeReferenceLabel = map[string]string{
+	"found":     "used in code",
+	"not-found": "no code reference found",
+	"unknown":   "code usage unknown",
+}
+
 // PrintTerminal writes a human-readable, colorized report to stdout.
 func PrintTerminal(vulns []trace.Vulnerability) {
 	if len(vulns) == 0 {
@@ -57,9 +63,7 @@ func PrintTerminal(vulns []trace.Vulnerability) {
 			fixed,
 		)
 		fmt.Println("  " + colorGray + v.ManifestPath + colorReset)
-		if context := describeContext(v); context != "" {
-			fmt.Println("  " + colorGray + context + colorReset)
-		}
+		fmt.Println("  " + colorGray + describeContext(v) + colorReset)
 		if v.Summary != "" {
 			fmt.Println("  " + colorGray + v.Summary + colorReset)
 		}
@@ -87,12 +91,10 @@ func preferredLabel(v trace.Vulnerability) string {
 }
 
 // describeContext builds a one-line triage summary from the heuristic scope/
-// usage fields -- "transitive (via a > b)", "production", etc. None of this
-// is proof of anything: dependencyScope/usageContext are noise-reduction
-// signals for prioritizing what to look at first, not a reachability
-// guarantee. Returns "" when there's nothing informative to say (both fields
-// unknown), so the terminal report doesn't print an empty line for every
-// finding from a source that can't determine either.
+// usage/code-reference fields -- "transitive (via a > b) · production · used
+// in code", etc. None of this is proof of anything: dependencyScope/
+// usageContext/codeReference are noise-reduction signals for prioritizing
+// what to look at first, not a reachability guarantee.
 func describeContext(v trace.Vulnerability) string {
 	var parts []string
 
@@ -106,6 +108,12 @@ func describeContext(v trace.Vulnerability) string {
 	if v.UsageContext != "" && v.UsageContext != "unknown" {
 		parts = append(parts, v.UsageContext)
 	}
+
+	label, ok := codeReferenceLabel[v.CodeReference]
+	if !ok {
+		label = codeReferenceLabel["unknown"]
+	}
+	parts = append(parts, label)
 
 	return strings.Join(parts, " · ")
 }

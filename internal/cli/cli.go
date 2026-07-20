@@ -13,12 +13,12 @@ import (
 	"github.com/jjuhric/cvetrace-go/internal/trace"
 )
 
-const usage = `cvetrace scans a Node.js project directory for known CVEs in its
-dependencies, using the free OSV.dev vulnerability database (no API key
-required).
+const usage = `cvetrace scans a Node.js/Java(Maven+Gradle)/Python project directory for
+known CVEs in its dependencies, using the free OSV.dev vulnerability database
+(no API key required).
 
-This is an early, Node-ecosystem-only slice of a larger port -- see the
-project README for what's implemented so far and what's planned next.
+This is an early slice of a larger port -- see the project README for what's
+implemented so far and what's planned next.
 
 Usage:
   cvetrace scan <path> [--json]
@@ -92,6 +92,12 @@ func runScan(args []string) int {
 	}
 
 	vulns, err := trace.Resolve(deps)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "cvetrace: %v\n", err)
+		return 1
+	}
+
+	vulns, err = trace.DetectCodeReferences(targetPath, vulns)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "cvetrace: %v\n", err)
 		return 1

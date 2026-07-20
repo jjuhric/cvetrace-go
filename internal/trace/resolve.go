@@ -36,6 +36,13 @@ type Vulnerability struct {
 	DependencyScope string   `json:"dependencyScope"`
 	UsageContext    string   `json:"usageContext"`
 	DependencyPath  []string `json:"dependencyPath,omitempty"`
+
+	// CodeReference is set by internal/trace's DetectCodeReferences, a
+	// separate pass over the project's own source files run after Resolve --
+	// every Vulnerability from Resolve itself starts with CodeReference
+	// unset ("", rendered "unknown" everywhere it's displayed) until that
+	// pass runs.
+	CodeReference string `json:"codeReference"`
 }
 
 // severityRank lets severities be compared/sorted, higher is worse. OSV.dev
