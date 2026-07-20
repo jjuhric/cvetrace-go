@@ -287,5 +287,11 @@ report) and each one builds on the last:
 9. [`internal/trace/usage.go`](internal/trace/usage.go) — a second `filepath.WalkDir`
    pass (this time over source files, not manifests) plus `regexp.QuoteMeta` for
    building a regex safely from an arbitrary package name.
-10. [`internal/cli/cli.go`](internal/cli/cli.go) — how it all gets wired into a runnable
+10. [`internal/trace/override.go`](internal/trace/override.go) — the smallest of the
+    trace files: mostly string-building, plus `strings.Cut(coordinate, ":")` (Go's
+    built-in "split into at most two pieces around the first separator," the same job
+    JS's `coordinate.split(":")` followed by taking `[0]`/`[1]` does, without building an
+    intermediate array just to throw most of it away) and a composite-literal-elision
+    example worth its own look in `npmOverride`.
+11. [`internal/cli/cli.go`](internal/cli/cli.go) — how it all gets wired into a runnable
     command.

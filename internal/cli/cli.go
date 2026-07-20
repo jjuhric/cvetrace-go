@@ -103,6 +103,8 @@ func runScan(args []string) int {
 		return 1
 	}
 
+	vulns = trace.ApplyOverrideSnippets(vulns)
+
 	if *jsonOutput {
 		out, err := report.BuildJSON(vulns)
 		if err != nil {

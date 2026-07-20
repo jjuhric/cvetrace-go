@@ -106,6 +106,11 @@ func PrintTerminal(vulns []trace.Vulnerability) {
 				"recommended target: " + v.RecommendedVersion + " (clears every known issue for this package)" +
 				colorReset)
 		}
+		if v.OverrideSnippet != nil {
+			fmt.Println("  " + colorGray +
+				"override available (edit " + v.OverrideSnippet.File + ") without waiting on the parent -- see --json for the exact snippet" +
+				colorReset)
+		}
 		if v.Summary != "" {
 			fmt.Println("  " + colorGray + v.Summary + colorReset)
 		}

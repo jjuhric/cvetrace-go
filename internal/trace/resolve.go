@@ -53,6 +53,12 @@ type Vulnerability struct {
 	// classifyRemediationTier's doc comment.
 	RemediationTier string `json:"remediationTier"`
 
+	// OverrideSnippet is set by ApplyOverrideSnippets, a separate pass run
+	// after Resolve -- nil for every Vulnerability from Resolve itself, and
+	// nil after ApplyOverrideSnippets too unless the finding is confidently
+	// transitive with a known target version (see generateOverrideSnippet).
+	OverrideSnippet *OverrideSnippet `json:"overrideSnippet,omitempty"`
+
 	// DependencyScope/UsageContext/DependencyPath are carried straight
 	// through from the discover.Dependency this Vulnerability was built
 	// from -- see that struct's field docs for exactly what each means and

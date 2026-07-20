@@ -12,7 +12,7 @@ into the binary, making it much larger).
 > and Python are all detected now (Gradle by actually invoking the target project's own
 > Gradle wrapper, same as the Node version), and every finding is tagged with
 > `dependencyScope`/`usageContext`/`dependencyPath`/`codeReference`/`updateImpact`/
-> `recommendedVersion`/`advisoryDetails`/`remediationTier`. Only `overrideSnippet` and
+> `recommendedVersion`/`advisoryDetails`/`remediationTier`/`overrideSnippet`. Only
 > `priorityScore`/`priorityLabel` from the Node version's "remediation intelligence"
 > report fields are **not built yet**. There's also no release pipeline yet publishing
 > downloadable binaries — for now this is run from source (see [Usage](#usage)); prebuilt,
@@ -96,7 +96,10 @@ the code. More detail in [GO_PRIMER.md](GO_PRIMER.md).
 3. **Usage detection** (`internal/trace/usage.go`) — a second, separate walk of the
    target directory's own source files (not manifests), tagging each finding's
    `codeReference` by regex-scanning for an import/require statement for that package.
-4. **Report** (`internal/report`) — a colorized terminal report, or `--json`.
+4. **Override snippets** (`internal/trace/override.go`) — for confidently transitive
+   findings with a known target version, generates the exact npm/Gradle/(future-ready
+   Maven) snippet to force that version without waiting on the parent to update.
+5. **Report** (`internal/report`) — a colorized terminal report, or `--json`.
 
 ## Fields on each finding
 
@@ -110,11 +113,12 @@ the code. More detail in [GO_PRIMER.md](GO_PRIMER.md).
 | `recommendedVersion` | version or omitted | The single highest fix version across every CVE known for this exact package instance -- "upgrade to X, clears everything" instead of reconciling N separate per-CVE targets. Omitted if no fix is known for any of them yet. |
 | `advisoryDetails` | text or omitted | OSV.dev's full advisory text, which frequently has a mitigation/workaround section beyond "upgrade" (e.g. Log4Shell's config-flag workaround for anyone who can't upgrade immediately). |
 | `remediationTier` | `safe-to-update` / `needs-approval` / `no-fix-available` / `unknown-impact` | Collapses `fixedVersion` + `updateImpact` into one decision to branch on directly -- see `classifyRemediationTier`'s doc comment in `internal/trace/resolve.go` for exactly what each value does and doesn't guarantee. Shown as the terminal report's `->` action line. |
+| `overrideSnippet` | object or omitted (JSON output only) | For transitive findings with a known target version: the exact `{file, instructions, snippet}` to force the patched version without waiting on the parent dependency to update -- npm `overrides`, Gradle `resolutionStrategy.force`, or (ready for when Maven support grows that far) Maven `dependencyManagement`. Often the fastest real fix for a transitive CVE. Omitted for direct dependencies and for ecosystems that don't resolve transitively at all. See `generateOverrideSnippet` in `internal/trace/override.go`. |
 
-The rest of the Node version's "remediation intelligence" fields (`overrideSnippet`,
-`priorityScore`/`priorityLabel`), plus `--fail-on`/`--exclude`/`--ignore`, are **not
-built yet**. The Node version (`jjuhric/cvetrace`) is the reference for what to build
-next; this project is about porting it to Go incrementally, not reinventing it.
+The rest of the Node version's "remediation intelligence" fields (`priorityScore`/
+`priorityLabel`), plus `--fail-on`/`--exclude`/`--ignore`, are **not built yet**. The
+Node version (`jjuhric/cvetrace`) is the reference for what to build next; this project
+is about porting it to Go incrementally, not reinventing it.
 
 ## What's implemented so far
 
