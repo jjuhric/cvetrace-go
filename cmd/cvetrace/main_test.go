@@ -102,7 +102,26 @@ func TestScanReportsKnownCVEInPythonFixtureWithoutDuplicates(t *testing.T) {
 	}
 }
 
-func TestScanWalksAMixedDirectoryAndFindsAllThreeEcosystems(t *testing.T) {
+// TestScanReportsKnownCVEInGradleFixtureViaRealInvocation runs the built CLI
+// against a fixture with a real, committed Gradle wrapper -- this specifically
+// exercises resolveGradleProject's actual subprocess invocation path, not
+// just the static-parsing fallback. Needs Java installed, and can be slow on
+// a cold Gradle distribution/daemon cache, hence the generous timeout.
+func TestScanReportsKnownCVEInGradleFixtureViaRealInvocation(t *testing.T) {
+	fixture := filepath.Join("..", "..", "test", "fixtures", "gradle-fixture-project")
+
+	cmd := exec.Command("go", "run", ".", "scan", fixture)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("cvetrace scan failed: %v\noutput:\n%s", err, out)
+	}
+
+	if !strings.Contains(string(out), "CVE-2021-44228") {
+		t.Errorf("expected Log4Shell (CVE-2021-44228) in output, got:\n%s", out)
+	}
+}
+
+func TestScanWalksAMixedDirectoryAndFindsAllFourEcosystems(t *testing.T) {
 	fixturesDir := filepath.Join("..", "..", "test", "fixtures")
 
 	cmd := exec.Command("go", "run", ".", "scan", fixturesDir, "--json")
@@ -116,5 +135,29 @@ func TestScanWalksAMixedDirectoryAndFindsAllThreeEcosystems(t *testing.T) {
 		if !strings.Contains(output, want) {
 			t.Errorf("expected %s in output", want)
 		}
+	}
+
+	// The pom.xml and build.gradle fixtures both pin log4j-core@2.14.1 --
+	// confirms dedupeByCVE's manifest-scoped key reports each manifest's
+	// occurrence separately instead of collapsing them into one.
+	var report struct {
+		Vulnerabilities []struct {
+			Name         string `json:"name"`
+			ManifestPath string `json:"manifestPath"`
+		} `json:"vulnerabilities"`
+	}
+	if err := json.Unmarshal(out, &report); err != nil {
+		t.Fatalf("could not parse output as JSON: %v", err)
+	}
+
+	manifests := make(map[string]bool)
+	for _, v := range report.Vulnerabilities {
+		if v.Name == "org.apache.logging.log4j:log4j-core" {
+			manifests[v.ManifestPath] = true
+		}
+	}
+	if len(manifests) != 2 {
+		t.Errorf("expected log4j-core reported for 2 distinct manifests (pom.xml and build.gradle), got %d: %v",
+			len(manifests), manifests)
 	}
 }

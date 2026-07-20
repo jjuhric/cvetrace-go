@@ -7,15 +7,14 @@ nothing to install to run it, unlike the Node.js original (which needs Node
 installed) or a compiled-JS approach like Bun (which bundles a whole JS runtime
 into the binary, making it much larger).
 
-> **Status: early slice, discovery-only.** This is the second of several planned
+> **Status: early slice, discovery-only.** This is one of several planned
 > increments — see [What's implemented so far](#whats-implemented-so-far). Node,
-> Java/Maven, and Python are all detected now; Gradle's real dependency resolution
-> (the Node version invokes the target project's own Gradle wrapper for full accuracy)
-> and everything the Node version's "remediation intelligence" report fields provide are
-> **not built yet**. There's also no release pipeline yet publishing downloadable
-> binaries — for now this is run from source (see [Usage](#usage)); prebuilt,
-> zero-install binaries are the whole point of doing this in Go, and are a planned
-> near-term addition.
+> Java/Maven, Java/Gradle, and Python are all detected now (Gradle by actually invoking
+> the target project's own Gradle wrapper, same as the Node version); everything the Node
+> version's "remediation intelligence" report fields provide is **not built yet**.
+> There's also no release pipeline yet publishing downloadable binaries — for now this is
+> run from source (see [Usage](#usage)); prebuilt, zero-install binaries are the whole
+> point of doing this in Go, and are a planned near-term addition.
 
 **New to Go?** See [GO_PRIMER.md](GO_PRIMER.md) — a concept map from what you already
 know from the Node version of this project (JavaScript) to Go, plus pointers to where
@@ -38,6 +37,7 @@ single machine with zero extra tooling (`GOOS=windows go build`, no toolchain ju
 | Scenario | What you need |
 |---|---|
 | Building/running from source (current state) | [Go](https://go.dev) 1.26+ installed, and outbound internet access to `api.osv.dev` (the vulnerability lookup) |
+| Scanning a project with a Gradle build | Also needs Java installed (for Gradle itself) — only when the target project actually has a `build.gradle`/`.kts`; irrelevant otherwise |
 | Running a prebuilt binary (planned, not yet published) | Nothing. That's the point. |
 
 ## Usage
@@ -56,8 +56,9 @@ go build -o cvetrace ./cmd/cvetrace
 ```
 
 - `<path-to-project>` — directory to scan. Detects Node (`package.json`/
-  `package-lock.json`), Java/Maven (`pom.xml`), and Python (`Pipfile.lock`/
-  `requirements.txt`/`pyproject.toml`) — see
+  `package-lock.json`), Java/Maven (`pom.xml`), Java/Gradle (`build.gradle`/`.kts`, via
+  a real invocation of the target project's own Gradle wrapper), and Python
+  (`Pipfile.lock`/`requirements.txt`/`pyproject.toml`) — see
   [What's implemented so far](#whats-implemented-so-far) for exactly what's covered.
 - `--json` — emit a machine-readable JSON report instead of the terminal report.
 
@@ -74,8 +75,11 @@ the code. More detail in [GO_PRIMER.md](GO_PRIMER.md).
    `node_modules`/`.git`/`target`/etc., and parse each ecosystem's manifests into
    resolved `{ecosystem, name, version}` dependencies: Node's `package.json`/
    `package-lock.json` (`node.go`), Maven's `pom.xml` via Go's built-in XML parser
-   (`java.go`), and Python's `Pipfile.lock`/`requirements.txt`/`pyproject.toml`
-   (`python.go`).
+   (`java.go`), Gradle's `build.gradle`/`.kts` by actually invoking the target project's
+   own Gradle wrapper with a generated init script (`gradle.go` — the same
+   "fully-resolved, not statically parsed" approach the Node version uses, with a
+   regex-based static-parsing fallback if Gradle can't be invoked), and Python's
+   `Pipfile.lock`/`requirements.txt`/`pyproject.toml` (`python.go`).
 2. **Trace** (`internal/trace`) — batch-query [OSV.dev](https://osv.dev) (free, no API
    key) for each dependency, compute the correct fixed version for the *specific*
    affected-version range the current version actually falls in (a real bug from the
@@ -91,10 +95,10 @@ the code. More detail in [GO_PRIMER.md](GO_PRIMER.md).
 |---|---|---|
 | Node.js | `package.json`, `package-lock.json` | Implemented |
 | Java (Maven) | `pom.xml`, incl. `${property}` resolution | Implemented |
-| Java (Gradle) | `build.gradle`/`.kts` | Not yet — planned. The Node version gets full accuracy here by actually invoking the target project's own Gradle wrapper, which is a meaningfully bigger effort than static parsing (subprocess management, a generated init script) -- deliberately its own future increment rather than bundled in with Java/Python. |
+| Java (Gradle) | `build.gradle`/`.kts` | Implemented — invokes the target project's own `gradlew`/`gradlew.bat` wrapper (falling back to a system-wide `gradle` if no wrapper is present) with a generated init script that prints every resolved dependency, the same full-accuracy approach the Node version uses. Falls back to regex-based static parsing of `build.gradle` only if Gradle itself can't be invoked (e.g. no Java installed). |
 | Python | `Pipfile.lock`, `requirements.txt`, `pyproject.toml` (best-effort, not a full TOML parser -- see `python.go`) | Implemented |
 
-None of the Node version's later "remediation intelligence" fields
+None of the Node version's "remediation intelligence" fields
 (`dependencyScope`/`usageContext`/`dependencyPath`/`codeReference`/`updateImpact`/
 `recommendedVersion`/`overrideSnippet`/`advisoryDetails`/`priorityScore`/
 `remediationTier`), nor `--fail-on`/`--exclude`/`--ignore`, exist in this port yet
@@ -119,9 +123,13 @@ GOOS=linux   GOARCH=amd64 go build -o cvetrace-linux ./cmd/cvetrace
 ```
 
 Test fixtures live under `test/fixtures/*-fixture-project` — copies of the Node repo's
-fixtures of the same names (`minimist@0.0.8`, `log4j-core@2.14.1` a.k.a. Log4Shell, and
-`PyYAML==5.3`, each a real, known CVE), kept in sync so both projects prove correctness
-against the exact same known vulnerabilities.
+fixtures of the same names (`minimist@0.0.8`, `log4j-core@2.14.1` a.k.a. Log4Shell (both
+in `java-fixture-project`'s `pom.xml` and, separately, in `gradle-fixture-project`'s
+`build.gradle`), and `PyYAML==5.3`, each a real, known CVE), kept in sync so both
+projects prove correctness against the exact same known vulnerabilities. The Gradle
+fixture includes a real, committed Gradle wrapper so its test exercises actual Gradle
+invocation, not just the static-parsing fallback — expect that particular test to be the
+slowest in the suite (Gradle daemon/dependency-cache startup).
 
 ## Project layout
 

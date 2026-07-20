@@ -150,6 +150,50 @@ malicious or just weird input can never cause catastrophic backtracking the way 
 occasionally can in JS. None of the patterns in this project needed the unsupported
 features, so this only ever helps.
 
+## Running another program and giving up on it if it hangs
+
+**JS (this project's Node version):** `src/discover/gradle.js` shells out to the target
+project's own `gradlew` using `child_process.spawn`, with a manually-managed timer that
+calls `.kill()` on the child process if it doesn't finish in time.
+
+**Go:** [`internal/discover/gradle.go`](internal/discover/gradle.go) does the equivalent
+with two standard-library pieces that compose together:
+
+```go
+ctx, cancel := context.WithTimeout(context.Background(), gradleTimeout)
+defer cancel()
+
+cmd := exec.CommandContext(ctx, command, args...)
+stdout, err := cmd.Output()
+```
+
+A `context.Context` is Go's general-purpose way to carry a deadline/cancellation signal
+*through* a call chain — `context.WithTimeout` creates one that automatically fires after
+`gradleTimeout` (5 minutes here) elapses. `exec.CommandContext` (as opposed to plain
+`exec.Command`) ties a subprocess's lifetime to that context: if the timeout fires while
+Gradle is still running, Go kills the process for you — no manual timer or `.kill()` call
+to remember, and no risk of a leaked Gradle process lingering after this program moves on.
+`defer cancel()` releases the context's internal timer resources as soon as
+`resolveGradleProject` returns, whether it returned normally or via the timeout.
+
+This pattern — a context carrying "how long am I willing to wait," handed to whatever
+might block — is idiomatic Go for *any* operation with a deadline, not just subprocesses;
+you'll see the same `context.Context` type show up if this project ever adds
+cancellable/timeout-bound HTTP requests in `internal/trace/osv.go` too.
+
+Two more pieces worth knowing about from the same file:
+
+- `os.CreateTemp("", "cvetrace-init-*.gradle")` creates a temporary file with a unique
+  name (Go substitutes `*` with random digits) — used here to write out a generated
+  Gradle init script without colliding with a concurrent run of the same tool. Paired
+  with `defer os.Remove(initScript.Name())` for cleanup, the same "acquire, defer the
+  release right next to it" idiom as `defer resp.Body.Close()` above.
+- `cmd.Output()` returns the subprocess's captured stdout directly, while a separate
+  `bytes.Buffer` assigned to `cmd.Stderr` captures error output for a more useful error
+  message if the command fails — Go's `exec.Cmd` treats stdout/stderr as plain
+  `io.Writer` targets you wire up explicitly, rather than always inheriting the parent
+  process's streams the way a naive `child_process.exec` callback bundles both together.
+
 ## Running and building
 
 **JS:** `node bin/cvetrace.js scan .` runs the source directly, every time, needing
@@ -192,13 +236,18 @@ report) and each one builds on the last:
    the `,any` catch-all technique for `<properties>`'s arbitrarily-named children.
 4. [`internal/discover/python.go`](internal/discover/python.go) — regexp-based
    best-effort parsing, and the `readIfExists` helper's `(value, ok, error)` pattern.
-5. [`internal/discover/discover.go`](internal/discover/discover.go) — how the three
+5. [`internal/discover/gradle.go`](internal/discover/gradle.go) — the most involved
+   discoverer: actually running a subprocess (the target project's own Gradle wrapper)
+   with a timeout, rather than just parsing a file. See
+   [Running another program and giving up on it if it hangs](#running-another-program-and-giving-up-on-it-if-it-hangs)
+   above before this one.
+6. [`internal/discover/discover.go`](internal/discover/discover.go) — how all four
    discoverers above get dispatched during a single directory walk.
-6. [`internal/trace/osv.go`](internal/trace/osv.go) — an HTTP client using only the
+7. [`internal/trace/osv.go`](internal/trace/osv.go) — an HTTP client using only the
    standard library, more JSON structs.
-7. [`internal/trace/resolve.go`](internal/trace/resolve.go) — the most involved file;
+8. [`internal/trace/resolve.go`](internal/trace/resolve.go) — the most involved file;
    read its doc comments carefully, especially `minimumFixedVersion` and `dedupeByCVE`
    (both fix real bugs found while building this project, documented right where the
    fix lives).
-8. [`internal/cli/cli.go`](internal/cli/cli.go) — how it all gets wired into a runnable
+9. [`internal/cli/cli.go`](internal/cli/cli.go) — how it all gets wired into a runnable
    command.

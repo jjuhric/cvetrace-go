@@ -2,3 +2,7 @@
 /cvetrace
 /cvetrace.exe
 /dist/
+
+# Gradle's own local build cache, created when the fixture's wrapper actually
+# runs (see test/fixtures/gradle-fixture-project) -- not something to commit.
+.gradle/

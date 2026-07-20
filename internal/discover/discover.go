@@ -35,11 +35,13 @@ var pythonManifestNames = map[string]struct{}{
 }
 
 // Walk finds every dependency declared or resolved anywhere under root:
-// Node (package.json/package-lock.json), Java/Maven (pom.xml), and Python
-// (Pipfile.lock/requirements.txt/pyproject.toml). Gradle and full transitive
-// resolution for Java/Python are planned future additions, not implemented
-// yet -- see the project README. Directories listed in skipDirs are never
-// descended into.
+// Node (package.json/package-lock.json), Java/Maven (pom.xml), Java/Gradle
+// (build.gradle/.kts, fully resolved by actually invoking the target
+// project's own Gradle wrapper -- see gradle.go), and Python (Pipfile.lock/
+// requirements.txt/pyproject.toml). Full transitive resolution for Java's
+// Maven support and for Python is a planned future addition, not
+// implemented yet -- see the project README. Directories listed in
+// skipDirs are never descended into.
 //
 // Go note: functions that can fail return an error as their *last* return
 // value, instead of throwing an exception the way JS's try/catch expects.
@@ -51,13 +53,16 @@ func Walk(root string) ([]Dependency, error) {
 	var deps []Dependency
 
 	// Go note: a directory can have more than one Python manifest present
-	// (e.g. both requirements.txt and pyproject.toml), but discoverPython
-	// should only run once per directory, not once per matching filename.
-	// pythonVisited tracks which directories have already been handled --
-	// captured by the closure below the same way deps is, since a Go closure
-	// (the anonymous func passed to WalkDir) can read and modify variables
-	// declared in its enclosing function.
+	// (e.g. both requirements.txt and pyproject.toml), and a Gradle project
+	// can have both build.gradle and build.gradle.kts, but neither
+	// discoverPython nor Gradle resolution should run twice for the same
+	// directory. These maps track what's already been queued/handled --
+	// captured by the closure below the same way deps is, since a Go
+	// closure (the anonymous func passed to WalkDir) can read and modify
+	// variables declared in its enclosing function.
 	pythonVisited := make(map[string]bool)
+	gradleVisited := make(map[string]bool)
+	var gradleDirs []string
 
 	// filepath.WalkDir visits every file and directory under root, calling
 	// the function below once per entry. Returning filepath.SkipDir from
@@ -95,6 +100,16 @@ func Walk(root string) ([]Dependency, error) {
 			}
 			deps = append(deps, found...)
 
+		case d.Name() == "build.gradle" || d.Name() == "build.gradle.kts":
+			// Gradle resolution needs the whole tree of build.gradle
+			// directories collected first (a multi-module build must be
+			// resolved once from its root, not once per subproject) -- see
+			// discoverGradle in gradle.go, called once the walk finishes.
+			if !gradleVisited[dir] {
+				gradleVisited[dir] = true
+				gradleDirs = append(gradleDirs, dir)
+			}
+
 		default:
 			if _, isPythonManifest := pythonManifestNames[d.Name()]; isPythonManifest && !pythonVisited[dir] {
 				pythonVisited[dir] = true
@@ -110,6 +125,10 @@ func Walk(root string) ([]Dependency, error) {
 	})
 	if err != nil {
 		return nil, err
+	}
+
+	if len(gradleDirs) > 0 {
+		deps = append(deps, discoverGradle(gradleDirs, root)...)
 	}
 
 	return deps, nil
