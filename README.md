@@ -7,13 +7,15 @@ nothing to install to run it, unlike the Node.js original (which needs Node
 installed) or a compiled-JS approach like Bun (which bundles a whole JS runtime
 into the binary, making it much larger).
 
-> **Status: early, Node-ecosystem-only slice.** This is the first of several planned
-> increments — see [What's implemented so far](#whats-implemented-so-far). Java, Python,
-> and Gradle support, plus everything the Node version's "remediation intelligence"
-> report fields provide, are **not built yet**. There's also no release pipeline yet
-> publishing downloadable binaries — for now this is run from source (see
-> [Usage](#usage)); prebuilt, zero-install binaries are the whole point of doing this in
-> Go, and are a planned near-term addition.
+> **Status: early slice, discovery-only.** This is the second of several planned
+> increments — see [What's implemented so far](#whats-implemented-so-far). Node,
+> Java/Maven, and Python are all detected now; Gradle's real dependency resolution
+> (the Node version invokes the target project's own Gradle wrapper for full accuracy)
+> and everything the Node version's "remediation intelligence" report fields provide are
+> **not built yet**. There's also no release pipeline yet publishing downloadable
+> binaries — for now this is run from source (see [Usage](#usage)); prebuilt,
+> zero-install binaries are the whole point of doing this in Go, and are a planned
+> near-term addition.
 
 **New to Go?** See [GO_PRIMER.md](GO_PRIMER.md) — a concept map from what you already
 know from the Node version of this project (JavaScript) to Go, plus pointers to where
@@ -53,8 +55,10 @@ go build -o cvetrace ./cmd/cvetrace
 ./cvetrace scan <path-to-project> [--json]
 ```
 
-- `<path-to-project>` — directory to scan. Currently only Node projects are detected
-  (`package.json`/`package-lock.json`).
+- `<path-to-project>` — directory to scan. Detects Node (`package.json`/
+  `package-lock.json`), Java/Maven (`pom.xml`), and Python (`Pipfile.lock`/
+  `requirements.txt`/`pyproject.toml`) — see
+  [What's implemented so far](#whats-implemented-so-far) for exactly what's covered.
 - `--json` — emit a machine-readable JSON report instead of the terminal report.
 
 **Go note:** unlike the Node version's CLI (built on commander.js, which accepts flags
@@ -67,29 +71,35 @@ the code. More detail in [GO_PRIMER.md](GO_PRIMER.md).
 ## How it works
 
 1. **Discover** (`internal/discover`) — walk the target directory, skip
-   `node_modules`/`.git`/etc., and parse `package.json` + `package-lock.json` into
-   resolved `{ecosystem, name, version}` dependencies.
+   `node_modules`/`.git`/`target`/etc., and parse each ecosystem's manifests into
+   resolved `{ecosystem, name, version}` dependencies: Node's `package.json`/
+   `package-lock.json` (`node.go`), Maven's `pom.xml` via Go's built-in XML parser
+   (`java.go`), and Python's `Pipfile.lock`/`requirements.txt`/`pyproject.toml`
+   (`python.go`).
 2. **Trace** (`internal/trace`) — batch-query [OSV.dev](https://osv.dev) (free, no API
-   key) for each dependency, and compute the correct fixed version for the *specific*
-   affected-version range the current version actually falls in — a real bug from the
-   Node version's development ported over as a fix and a regression test here too (see
-   `minimumFixedVersion`'s doc comment in `internal/trace/resolve.go`).
+   key) for each dependency, compute the correct fixed version for the *specific*
+   affected-version range the current version actually falls in (a real bug from the
+   Node version's development, ported over as a fix and a regression test here too --
+   see `minimumFixedVersion`'s doc comment in `internal/trace/resolve.go`), and collapse
+   duplicate records OSV.dev sometimes indexes the same CVE under (another real bug,
+   found this time while building *this* port -- see `dedupeByCVE`'s doc comment).
 3. **Report** (`internal/report`) — a colorized terminal report, or `--json`.
 
 ## What's implemented so far
 
-| Ecosystem | Status |
-|---|---|
-| Node.js (`package.json`/`package-lock.json`) | Implemented |
-| Java (Maven/Gradle) | Not yet — planned |
-| Python | Not yet — planned |
+| Ecosystem | Manifests read | Status |
+|---|---|---|
+| Node.js | `package.json`, `package-lock.json` | Implemented |
+| Java (Maven) | `pom.xml`, incl. `${property}` resolution | Implemented |
+| Java (Gradle) | `build.gradle`/`.kts` | Not yet — planned. The Node version gets full accuracy here by actually invoking the target project's own Gradle wrapper, which is a meaningfully bigger effort than static parsing (subprocess management, a generated init script) -- deliberately its own future increment rather than bundled in with Java/Python. |
+| Python | `Pipfile.lock`, `requirements.txt`, `pyproject.toml` (best-effort, not a full TOML parser -- see `python.go`) | Implemented |
 
 None of the Node version's later "remediation intelligence" fields
-(`dependencyScope`/`usageContext`/`codeReference`/`updateImpact`/`recommendedVersion`/
-`overrideSnippet`/`advisoryDetails`/`priorityScore`/`remediationTier`), nor
-`--fail-on`/`--exclude`/`--ignore`, exist in this port yet either. The Node version
-(`jjuhric/cvetrace`) is the reference for what to build next; this project is about
-porting it to Go incrementally, not reinventing it.
+(`dependencyScope`/`usageContext`/`dependencyPath`/`codeReference`/`updateImpact`/
+`recommendedVersion`/`overrideSnippet`/`advisoryDetails`/`priorityScore`/
+`remediationTier`), nor `--fail-on`/`--exclude`/`--ignore`, exist in this port yet
+either. The Node version (`jjuhric/cvetrace`) is the reference for what to build next;
+this project is about porting it to Go incrementally, not reinventing it.
 
 ## Development
 
@@ -108,9 +118,10 @@ GOOS=darwin  GOARCH=arm64 go build -o cvetrace-mac  ./cmd/cvetrace
 GOOS=linux   GOARCH=amd64 go build -o cvetrace-linux ./cmd/cvetrace
 ```
 
-Test fixtures live under `test/fixtures/*-fixture-project` — currently a copy of the
-Node repo's `node-fixture-project` (pins `minimist@0.0.8`, a real, known CVE), kept in
-sync so both projects prove correctness against the exact same known vulnerabilities.
+Test fixtures live under `test/fixtures/*-fixture-project` — copies of the Node repo's
+fixtures of the same names (`minimist@0.0.8`, `log4j-core@2.14.1` a.k.a. Log4Shell, and
+`PyYAML==5.3`, each a real, known CVE), kept in sync so both projects prove correctness
+against the exact same known vulnerabilities.
 
 ## Project layout
 

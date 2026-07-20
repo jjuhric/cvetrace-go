@@ -113,6 +113,43 @@ regression test here too.
 anything else); `t.Errorf` records a failure but lets the test keep running (use to
 report several independent problems from one test instead of stopping at the first).
 
+## Parsing formats beyond JSON
+
+**JS (this project's Node version):** JSON parsing is built into the language
+(`JSON.parse`), but there's no built-in XML support and no built-in TOML support --
+`src/discover/java.js` in the Node repo has to fall back to regular expressions to
+scrape `pom.xml`, since JavaScript simply has nothing better for XML.
+
+**Go:** the standard library ships a real XML parser, `encoding/xml` -- see
+[`internal/discover/java.go`](internal/discover/java.go). `xml.Unmarshal` decodes
+`pom.xml` directly into Go structs the same way `encoding/json` decodes JSON, matching
+struct tags (`` `xml:"groupId"` ``) to element names, so this Go port doesn't need the
+regex workaround the Node version does for the same file. One subtlety worth knowing:
+by default, a struct tag with no namespace prefix matches an element by its *local*
+name regardless of what XML namespace it's actually in -- which is why this still
+decodes correctly even though the real `pom.xml` fixture declares a default namespace
+(`xmlns="http://maven.apache.org/POM/4.0.0"`) on its root element.
+
+`<properties>` needed a different technique, though: its child elements have
+*arbitrary*, project-defined tag names (`<log4j.version>2.14.1</log4j.version>` -- the
+tag name itself *is* the property name), which can't be declared as fixed struct fields
+the way `<dependency>`'s always-the-same-shape children can. `` `xml:",any"` `` is
+Go's catch-all for exactly this: "match any child element I haven't already claimed,"
+capturing the tag name and text content generically. Look at the `mavenProperty`
+struct and its usage in `java.go` for the full pattern.
+
+Go's standard library has *no* TOML support at all, unlike JSON and XML -- so
+[`internal/discover/python.go`](internal/discover/python.go)'s `pyproject.toml`
+handling stays regex-based and best-effort, same as the Node version's, rather than
+reaching for this project's first third-party dependency over partial TOML coverage.
+That file also uses Go's `regexp` package (`internal/discover/python.go`), which is
+worth one note of its own: it implements RE2 syntax, a different (and less expressive)
+engine than JS's regex -- no backreferences, no lookahead/lookbehind -- in exchange for
+a hard guarantee that matching always runs in time linear to the input's length, so a
+malicious or just weird input can never cause catastrophic backtracking the way it
+occasionally can in JS. None of the patterns in this project needed the unsupported
+features, so this only ever helps.
+
 ## Running and building
 
 **JS:** `node bin/cvetrace.js scan .` runs the source directly, every time, needing
@@ -151,9 +188,17 @@ report) and each one builds on the last:
    the project, just a struct definition. Start here.
 2. [`internal/discover/node.go`](internal/discover/node.go) — JSON parsing, error
    handling, the zero-value pattern.
-3. [`internal/trace/osv.go`](internal/trace/osv.go) — an HTTP client using only the
+3. [`internal/discover/java.go`](internal/discover/java.go) — XML parsing, including
+   the `,any` catch-all technique for `<properties>`'s arbitrarily-named children.
+4. [`internal/discover/python.go`](internal/discover/python.go) — regexp-based
+   best-effort parsing, and the `readIfExists` helper's `(value, ok, error)` pattern.
+5. [`internal/discover/discover.go`](internal/discover/discover.go) — how the three
+   discoverers above get dispatched during a single directory walk.
+6. [`internal/trace/osv.go`](internal/trace/osv.go) — an HTTP client using only the
    standard library, more JSON structs.
-4. [`internal/trace/resolve.go`](internal/trace/resolve.go) — the most involved file;
-   read its doc comments carefully, especially `minimumFixedVersion`.
-5. [`internal/cli/cli.go`](internal/cli/cli.go) — how it all gets wired into a runnable
+7. [`internal/trace/resolve.go`](internal/trace/resolve.go) — the most involved file;
+   read its doc comments carefully, especially `minimumFixedVersion` and `dedupeByCVE`
+   (both fix real bugs found while building this project, documented right where the
+   fix lives).
+8. [`internal/cli/cli.go`](internal/cli/cli.go) — how it all gets wired into a runnable
    command.

@@ -75,6 +75,8 @@ func Resolve(deps []discover.Dependency) ([]Vulnerability, error) {
 		}
 	}
 
+	vulns = dedupeByCVE(vulns)
+
 	// Go note: sort.SliceStable takes the slice to sort and a "less"
 	// function -- there's no built-in comparator interface for plain
 	// slices the way some languages provide, you just tell it how to
@@ -86,6 +88,47 @@ func Resolve(deps []discover.Dependency) ([]Vulnerability, error) {
 	})
 
 	return vulns, nil
+}
+
+// dedupeByCVE collapses OSV.dev's habit of indexing the same underlying CVE
+// under more than one id for some ecosystems -- e.g. PyPI advisories often
+// exist as both a GHSA-* record (from GitHub's advisory database) and a
+// PYSEC-* record (from the Python Packaging Authority's own advisory
+// database) for the exact same CVE, which would otherwise show up as two
+// separate findings for one real vulnerability. This was a real bug found
+// while porting Python support to this Go version -- caught by actually
+// running the tool against a real fixture, not just by reasoning about the
+// code (see resolve_test.go for the regression test).
+//
+// The dedupe key is scoped per (ManifestPath, Name, CurrentVersion) so that
+// the *same* CVE affecting the same package pinned in two different
+// manifests still gets reported once per manifest, rather than the second
+// occurrence being wrongly dropped too.
+func dedupeByCVE(vulns []Vulnerability) []Vulnerability {
+	seen := make(map[string]bool, len(vulns))
+	out := make([]Vulnerability, 0, len(vulns))
+	for _, v := range vulns {
+		key := v.ManifestPath + ":" + v.Name + "@" + v.CurrentVersion + ":" + cveOrID(v)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, v)
+	}
+	return out
+}
+
+// cveOrID picks the CVE-* alias to key on when one exists (the two records
+// OSV.dev might index the same vulnerability under both carry the same CVE
+// alias, even though their own ids differ), falling back to the record's own
+// id if it has no CVE alias at all.
+func cveOrID(v Vulnerability) string {
+	for _, alias := range v.Aliases {
+		if strings.HasPrefix(alias, "CVE-") {
+			return alias
+		}
+	}
+	return v.ID
 }
 
 func buildVulnerability(dep discover.Dependency, detail *VulnDetail) Vulnerability {

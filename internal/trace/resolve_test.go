@@ -96,3 +96,32 @@ func TestParseVersionPartsRejectsNonNumericInput(t *testing.T) {
 		t.Error("expected parseVersionParts to report failure for non-numeric input")
 	}
 }
+
+// TestDedupeByCVECollapsesGHSAAndPYSECRecords is a regression test for a
+// real bug found while porting Python support to this Go version: OSV.dev
+// indexes some PyPI CVEs under both a GHSA-* id and a PYSEC-* id, which
+// showed up as the same CVE reported twice against pyyaml@5.3 in the actual
+// fixture before this fix.
+func TestDedupeByCVECollapsesGHSAAndPYSECRecords(t *testing.T) {
+	vulns := []Vulnerability{
+		{ManifestPath: "requirements.txt", Name: "pyyaml", CurrentVersion: "5.3", ID: "GHSA-xxxx", Aliases: []string{"CVE-2020-14343"}},
+		{ManifestPath: "requirements.txt", Name: "pyyaml", CurrentVersion: "5.3", ID: "PYSEC-2021-142", Aliases: []string{"CVE-2020-14343"}},
+	}
+
+	got := dedupeByCVE(vulns)
+	if len(got) != 1 {
+		t.Fatalf("got %d records, want 1 (GHSA/PYSEC duplicates should collapse)", len(got))
+	}
+}
+
+func TestDedupeByCVEKeepsTheSameCVEAcrossDifferentManifestsSeparate(t *testing.T) {
+	vulns := []Vulnerability{
+		{ManifestPath: "a/pom.xml", Name: "pkg", CurrentVersion: "1.0.0", ID: "GHSA-xxxx", Aliases: []string{"CVE-2021-1"}},
+		{ManifestPath: "b/build.gradle", Name: "pkg", CurrentVersion: "1.0.0", ID: "GHSA-xxxx", Aliases: []string{"CVE-2021-1"}},
+	}
+
+	got := dedupeByCVE(vulns)
+	if len(got) != 2 {
+		t.Fatalf("got %d records, want 2 (same CVE, different manifests, both should be kept)", len(got))
+	}
+}
