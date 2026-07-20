@@ -7,12 +7,14 @@ import (
 )
 
 // TestParseGradleOutput is a pure test (no real Gradle process needed) for
-// the flat CVETRACE_DEP|... line format the init script produces --
-// deduplicates repeats and derives the group:artifact name correctly.
+// the flat CVETRACE_DIRECT/CVETRACE_DEP|... line format the init script
+// produces -- deduplicates repeats (the same coordinate reached via two
+// configurations) and derives the group:artifact name correctly.
 func TestParseGradleOutputParsesAndDedupes(t *testing.T) {
-	output := "CVETRACE_DEP|/proj|org.example:lib:1.0.0\n" +
-		"CVETRACE_DEP|/proj|org.example:lib:1.0.0\n" + // duplicate, e.g. seen via two configurations
-		"CVETRACE_DEP|/proj|org.example:other:2.0.0\n" +
+	output := "CVETRACE_DIRECT|/proj|org.example:lib\n" +
+		"CVETRACE_DEP|/proj|implementation|org.example:lib:1.0.0\n" +
+		"CVETRACE_DEP|/proj|testImplementation|org.example:lib:1.0.0\n" + // duplicate coordinate, second configuration
+		"CVETRACE_DEP|/proj|implementation|org.example:other:2.0.0\n" +
 		"not a CVETRACE line, should be ignored\n"
 
 	deps := parseGradleOutput(output)
@@ -30,6 +32,72 @@ func TestParseGradleOutputParsesAndDedupes(t *testing.T) {
 	if names["org.example:other"] != "2.0.0" {
 		t.Errorf("got other version %q, want %q", names["org.example:other"], "2.0.0")
 	}
+}
+
+// TestParseGradleOutputClassifiesScopeAndUsage checks the scope/usage/path
+// fields the init script's new CVETRACE_DIRECT lines and per-configuration
+// chains make possible: a first-level dependency declared directly in a
+// `dependencies {}` block is "direct"; anything only reached transitively
+// (via another dependency's own children) is "transitive" with a
+// DependencyPath; a coordinate seen only under a test-ish configuration name
+// is "development", otherwise "production".
+func TestParseGradleOutputClassifiesScopeAndUsage(t *testing.T) {
+	output := "CVETRACE_DIRECT|/proj|org.example:direct-lib\n" +
+		"CVETRACE_DEP|/proj|implementation|org.example:direct-lib:1.0.0\n" +
+		"CVETRACE_DEP|/proj|implementation|org.example:direct-lib:1.0.0>org.example:transitive-lib:2.0.0\n" +
+		"CVETRACE_DEP|/proj|testImplementation|org.example:test-only-lib:3.0.0\n"
+
+	deps := parseGradleOutput(output)
+	byName := make(map[string]Dependency, len(deps))
+	for _, d := range deps {
+		byName[d.Name] = d
+	}
+
+	direct, ok := byName["org.example:direct-lib"]
+	if !ok {
+		t.Fatal("expected org.example:direct-lib in output")
+	}
+	if direct.DependencyScope != "direct" {
+		t.Errorf("direct-lib: got dependencyScope %q, want %q", direct.DependencyScope, "direct")
+	}
+	if direct.UsageContext != "production" {
+		t.Errorf("direct-lib: got usageContext %q, want %q", direct.UsageContext, "production")
+	}
+	if direct.DependencyPath != nil {
+		t.Errorf("direct-lib: got dependencyPath %v, want nil (direct deps have no chain)", direct.DependencyPath)
+	}
+
+	transitive, ok := byName["org.example:transitive-lib"]
+	if !ok {
+		t.Fatal("expected org.example:transitive-lib in output")
+	}
+	if transitive.DependencyScope != "transitive" {
+		t.Errorf("transitive-lib: got dependencyScope %q, want %q", transitive.DependencyScope, "transitive")
+	}
+	wantPath := []string{"org.example:direct-lib", "org.example:transitive-lib"}
+	if !equalStringSlices(transitive.DependencyPath, wantPath) {
+		t.Errorf("transitive-lib: got dependencyPath %v, want %v", transitive.DependencyPath, wantPath)
+	}
+
+	testOnly, ok := byName["org.example:test-only-lib"]
+	if !ok {
+		t.Fatal("expected org.example:test-only-lib in output")
+	}
+	if testOnly.UsageContext != "development" {
+		t.Errorf("test-only-lib: got usageContext %q, want %q", testOnly.UsageContext, "development")
+	}
+}
+
+func equalStringSlices(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // TestFindGradleRootFindsTheNearestMarker uses a real temp directory tree

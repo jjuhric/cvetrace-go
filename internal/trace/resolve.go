@@ -28,6 +28,14 @@ type Vulnerability struct {
 	Severity       string   `json:"severity"`
 	FixedVersion   string   `json:"fixedVersion"` // "" means no known fix yet
 	URL            string   `json:"url"`
+
+	// DependencyScope/UsageContext/DependencyPath are carried straight
+	// through from the discover.Dependency this Vulnerability was built
+	// from -- see that struct's field docs for exactly what each means and
+	// which ecosystems can/can't populate them precisely.
+	DependencyScope string   `json:"dependencyScope"`
+	UsageContext    string   `json:"usageContext"`
+	DependencyPath  []string `json:"dependencyPath,omitempty"`
 }
 
 // severityRank lets severities be compared/sorted, higher is worse. OSV.dev
@@ -148,17 +156,29 @@ func buildVulnerability(dep discover.Dependency, detail *VulnDetail) Vulnerabili
 		url = "https://osv.dev/vulnerability/" + detail.ID
 	}
 
+	dependencyScope := dep.DependencyScope
+	if dependencyScope == "" {
+		dependencyScope = "unknown"
+	}
+	usageContext := dep.UsageContext
+	if usageContext == "" {
+		usageContext = "unknown"
+	}
+
 	return Vulnerability{
-		ManifestPath:   dep.ManifestPath,
-		Ecosystem:      dep.Ecosystem,
-		Name:           dep.Name,
-		CurrentVersion: dep.Version,
-		ID:             detail.ID,
-		Aliases:        detail.Aliases,
-		Summary:        detail.Summary,
-		Severity:       severity,
-		FixedVersion:   minimumFixedVersion(detail, dep.Ecosystem, dep.Name, dep.Version),
-		URL:            url,
+		ManifestPath:    dep.ManifestPath,
+		Ecosystem:       dep.Ecosystem,
+		Name:            dep.Name,
+		CurrentVersion:  dep.Version,
+		ID:              detail.ID,
+		Aliases:         detail.Aliases,
+		Summary:         detail.Summary,
+		Severity:        severity,
+		FixedVersion:    minimumFixedVersion(detail, dep.Ecosystem, dep.Name, dep.Version),
+		URL:             url,
+		DependencyScope: dependencyScope,
+		UsageContext:    usageContext,
+		DependencyPath:  dep.DependencyPath,
 	}
 }
 

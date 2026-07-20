@@ -63,7 +63,15 @@ func discoverJava(dir string) ([]Dependency, error) {
 		}
 		return nil, err
 	}
+	return fromPomXML(raw, manifestPath)
+}
 
+// fromPomXML does the actual parsing, split out from discoverJava (which
+// only handles the file I/O) so it can be unit-tested directly against an
+// in-memory pom.xml string instead of needing a real file on disk for every
+// case -- the same split python.go's discoverPipfileLock/discoverPyprojectTOML
+// already use.
+func fromPomXML(raw []byte, manifestPath string) ([]Dependency, error) {
 	var project mavenProject
 	if err := xml.Unmarshal(raw, &project); err != nil {
 		return nil, err
@@ -89,11 +97,20 @@ func discoverJava(dir string) ([]Dependency, error) {
 			continue
 		}
 
+		usageContext := "production"
+		if mavenDep.Scope == "test" {
+			usageContext = "development"
+		}
+
 		deps = append(deps, Dependency{
 			Ecosystem:    "Maven",
 			Name:         mavenDep.GroupID + ":" + mavenDep.ArtifactID,
 			Version:      version,
 			ManifestPath: manifestPath,
+			// pom.xml isn't resolved transitively (see README), so every
+			// discovered dependency is direct and has no chain to show.
+			DependencyScope: "direct",
+			UsageContext:    usageContext,
 		})
 	}
 

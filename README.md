@@ -7,14 +7,16 @@ nothing to install to run it, unlike the Node.js original (which needs Node
 installed) or a compiled-JS approach like Bun (which bundles a whole JS runtime
 into the binary, making it much larger).
 
-> **Status: early slice, discovery-only.** This is one of several planned
-> increments — see [What's implemented so far](#whats-implemented-so-far). Node,
-> Java/Maven, Java/Gradle, and Python are all detected now (Gradle by actually invoking
-> the target project's own Gradle wrapper, same as the Node version); everything the Node
-> version's "remediation intelligence" report fields provide is **not built yet**.
-> There's also no release pipeline yet publishing downloadable binaries — for now this is
-> run from source (see [Usage](#usage)); prebuilt, zero-install binaries are the whole
-> point of doing this in Go, and are a planned near-term addition.
+> **Status: early slice.** This is one of several planned increments — see
+> [What's implemented so far](#whats-implemented-so-far). Node, Java/Maven, Java/Gradle,
+> and Python are all detected now (Gradle by actually invoking the target project's own
+> Gradle wrapper, same as the Node version), each tagged with `dependencyScope`/
+> `usageContext`/`dependencyPath`; most of the rest of the Node version's "remediation
+> intelligence" report fields (`codeReference`, `updateImpact`, `recommendedVersion`,
+> `overrideSnippet`, `advisoryDetails`, `priorityScore`, `remediationTier`) are **not
+> built yet**. There's also no release pipeline yet publishing downloadable binaries —
+> for now this is run from source (see [Usage](#usage)); prebuilt, zero-install binaries
+> are the whole point of doing this in Go, and are a planned near-term addition.
 
 **New to Go?** See [GO_PRIMER.md](GO_PRIMER.md) — a concept map from what you already
 know from the Node version of this project (JavaScript) to Go, plus pointers to where
@@ -89,21 +91,29 @@ the code. More detail in [GO_PRIMER.md](GO_PRIMER.md).
    found this time while building *this* port -- see `dedupeByCVE`'s doc comment).
 3. **Report** (`internal/report`) — a colorized terminal report, or `--json`.
 
+## Fields on each finding
+
+| Field | Values | Meaning |
+|---|---|---|
+| `dependencyScope` | `direct` / `transitive` / `unknown` | Whether the vulnerable package is declared directly in your manifest, or pulled in by something else you depend on. |
+| `dependencyPath` | array or omitted | For transitive findings **in Node or Gradle** (the only ecosystems this port resolves a real dependency graph for): the chain from a direct dependency down to this package, e.g. `["webpack", "loader-utils", "vulnerable-pkg"]`. Omitted for direct dependencies, and always omitted for Maven/Python since those aren't resolved transitively at all. |
+| `usageContext` | `production` / `development` / `unknown` | Whether the package is reachable from your production dependencies, or only from dev/test/build tooling (`devDependencies`, Maven `test` scope, Gradle `testImplementation`, etc.) that never ships. |
+
+The rest of the Node version's "remediation intelligence" fields (`codeReference`,
+`updateImpact`, `recommendedVersion`, `overrideSnippet`, `advisoryDetails`,
+`priorityScore`/`priorityLabel`, `remediationTier`), plus `--fail-on`/`--exclude`/
+`--ignore`, are **not built yet**. The Node version (`jjuhric/cvetrace`) is the reference
+for what to build next; this project is about porting it to Go incrementally, not
+reinventing it.
+
 ## What's implemented so far
 
 | Ecosystem | Manifests read | Status |
 |---|---|---|
-| Node.js | `package.json`, `package-lock.json` | Implemented |
-| Java (Maven) | `pom.xml`, incl. `${property}` resolution | Implemented |
-| Java (Gradle) | `build.gradle`/`.kts` | Implemented — invokes the target project's own `gradlew`/`gradlew.bat` wrapper (falling back to a system-wide `gradle` if no wrapper is present) with a generated init script that prints every resolved dependency, the same full-accuracy approach the Node version uses. Falls back to regex-based static parsing of `build.gradle` only if Gradle itself can't be invoked (e.g. no Java installed). |
-| Python | `Pipfile.lock`, `requirements.txt`, `pyproject.toml` (best-effort, not a full TOML parser -- see `python.go`) | Implemented |
-
-None of the Node version's "remediation intelligence" fields
-(`dependencyScope`/`usageContext`/`dependencyPath`/`codeReference`/`updateImpact`/
-`recommendedVersion`/`overrideSnippet`/`advisoryDetails`/`priorityScore`/
-`remediationTier`), nor `--fail-on`/`--exclude`/`--ignore`, exist in this port yet
-either. The Node version (`jjuhric/cvetrace`) is the reference for what to build next;
-this project is about porting it to Go incrementally, not reinventing it.
+| Node.js | `package.json`, `package-lock.json` | Fully resolved, including transitive dependencies -- `dependencyScope`/`usageContext`/`dependencyPath` come from a breadth-first walk of the lockfile's own per-package `dependencies` graph, seeded from the root manifest's `dependencies`/`devDependencies` (see `buildNodeScopeMap` in `node.go`). |
+| Java (Maven) | `pom.xml`, incl. `${property}` resolution | Only directly declared dependencies are traced -- no transitive resolution (that would require invoking `mvn`, not currently done), so `dependencyScope` is always `direct` and `dependencyPath` is always omitted. `usageContext` comes from `<scope>test</scope>` mapping to `development`, everything else to `production`. |
+| Java (Gradle) | `build.gradle`/`.kts` | **Fully resolved** by actually invoking the target project's own `gradlew`/`gradlew.bat` wrapper (falling back to a system-wide `gradle` if no wrapper is present) with a generated init script, including transitive dependencies and the full dependency path to each one -- same accuracy as Node/npm. Falls back to regex-based static parsing of `build.gradle` (direct-only, no path) if Gradle itself can't be invoked (e.g. no Java installed). |
+| Python | `Pipfile.lock`, `requirements.txt`, `pyproject.toml` (best-effort, not a full TOML parser -- see `python.go`) | No transitive resolution -- `dependencyPath` is always omitted. `dependencyScope` is `direct` for requirements.txt/pyproject.toml, or `unknown` for Pipfile.lock (whose lock format doesn't retain which entries were originally declared vs. pulled in transitively). `usageContext` comes from Pipfile.lock's default/develop split, a `requirements-dev.txt`-style sibling filename, or a pyproject.toml/Poetry group name matching a dev-ish convention (`dev`, `test`, `docs`, `lint`, `typing`). |
 
 ## Development
 

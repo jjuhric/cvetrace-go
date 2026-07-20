@@ -90,6 +90,25 @@ The `(value, ok bool)` return pattern — see `parseVersionParts` in
 might not have worked" for non-error cases: instead of returning `null`/`NaN` the way JS
 might, it returns a second boolean the caller has to explicitly check.
 
+Sometimes, though, you genuinely want three states -- "unset," "set to the zero value,"
+and "set to something else" -- and a plain value can't tell the first two apart. A
+pointer can: a `nil` pointer means "unset," and a non-nil pointer (even one pointing at
+`""`) means "set." [`internal/discover/node.go`](internal/discover/node.go)'s
+`bfsPredecessors` needs exactly this: it records, for every package name reached while
+walking the dependency graph, which other package name pulled it in -- except for a
+*seed* package (one of the manifest's own direct dependencies), which has no predecessor
+at all. A plain `map[string]string` can't distinguish "reached, no predecessor" (a seed)
+from "never reached" (not in the map), since both would need to map to `""` and Go
+map lookups already have their own `(value, ok)` form for "was this key present" --
+using that same trick *inside* the stored value would be confusing. Instead
+`bfsPredecessors` returns `map[string]*string`: `nil` for a seed's predecessor, a
+pointer to the actual predecessor name otherwise, and simple key-presence in the map
+(checked the normal `map[string]ok` way) for "was this name reached by the search at
+all." This is the JS equivalent of the difference between `undefined` (key never set)
+and an object holding `{ predecessor: null }` (key set, value deliberately empty) --
+Go just makes you reach for a pointer to get that second state, since a bare `string`
+zero value can't represent it.
+
 ## `defer` instead of `finally`
 
 **Go:** `defer resp.Body.Close()` (see [`internal/trace/osv.go`](internal/trace/osv.go))
@@ -231,7 +250,11 @@ report) and each one builds on the last:
 1. [`internal/discover/types.go`](internal/discover/types.go) — the simplest file in
    the project, just a struct definition. Start here.
 2. [`internal/discover/node.go`](internal/discover/node.go) — JSON parsing, error
-   handling, the zero-value pattern.
+   handling, the zero-value pattern, and (its most involved part)
+   `buildNodeScopeMap`/`bfsPredecessors`'s breadth-first graph walk over the lockfile's
+   own dependency declarations -- see
+   [No `null`/`undefined` — zero values instead](#no-nullundefined--zero-values-instead)
+   above for why its predecessor map uses `*string` rather than plain `string`.
 3. [`internal/discover/java.go`](internal/discover/java.go) — XML parsing, including
    the `,any` catch-all technique for `<properties>`'s arbitrarily-named children.
 4. [`internal/discover/python.go`](internal/discover/python.go) — regexp-based

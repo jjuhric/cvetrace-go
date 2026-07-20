@@ -7,11 +7,23 @@ import (
 	"strings"
 )
 
+// devGroupRE matches a dependency-group name that, by common convention,
+// holds development-only packages (pyproject.toml optional-dependencies
+// groups, Poetry dependency groups) -- e.g. "dev", "test", "docs", "lint",
+// "typing". A heuristic, not a guarantee: a project is free to name its
+// groups anything.
+var devGroupRE = regexp.MustCompile(`(?i)^(dev|test|docs?|lint|typing)`)
+
+// devRequirementsFiles lists requirements.txt sibling filenames that, by
+// common convention, hold development-only packages -- read in addition to
+// requirements.txt itself (see discoverPython) and tagged usageContext
+// "development".
+var devRequirementsFiles = []string{"requirements-dev.txt", "requirements_dev.txt", "dev-requirements.txt"}
+
 // pipfileLock mirrors just the parts of a Pipfile.lock this project reads.
-// Both the "default" (production) and "develop" (dev-only) groups are read
-// -- this slice doesn't yet distinguish between them the way the Node
-// version's usageContext field does (that's a later, not-yet-ported
-// addition), it just reports every pinned package from either group.
+// The "default" (production) and "develop" (dev-only) groups map directly to
+// usageContext; dependencyScope is always "unknown" for entries from this
+// source (see discoverPipfileLock's doc comment for why).
 type pipfileLock struct {
 	Default map[string]pipfilePackage `json:"default"`
 	Develop map[string]pipfilePackage `json:"develop"`
@@ -39,6 +51,8 @@ var pypiNameSeparatorRE = regexp.MustCompile(`[-_.]+`)
 // requirements.txt (usually pinned) > pyproject.toml (declared ranges,
 // best-effort -- see discoverPyprojectTOML). Only one source is read per
 // directory, in that priority order, matching the Node version's own choice.
+// When requirements.txt is the source, any of devRequirementsFiles present
+// alongside it is also read and tagged usageContext "development".
 func discoverPython(dir string) ([]Dependency, error) {
 	lockPath := filepath.Join(dir, "Pipfile.lock")
 	if content, ok, err := readIfExists(lockPath); err != nil {
@@ -51,7 +65,16 @@ func discoverPython(dir string) ([]Dependency, error) {
 	if content, ok, err := readIfExists(reqPath); err != nil {
 		return nil, err
 	} else if ok {
-		return dedupe(discoverRequirementsTXT(content, reqPath)), nil
+		deps := discoverRequirementsTXT(content, reqPath, "production")
+		for _, devFile := range devRequirementsFiles {
+			devPath := filepath.Join(dir, devFile)
+			if devContent, ok, err := readIfExists(devPath); err != nil {
+				return nil, err
+			} else if ok {
+				deps = append(deps, discoverRequirementsTXT(devContent, devPath, "development")...)
+			}
+		}
+		return dedupe(deps), nil
 	}
 
 	tomlPath := filepath.Join(dir, "pyproject.toml")
@@ -64,31 +87,47 @@ func discoverPython(dir string) ([]Dependency, error) {
 	return nil, nil
 }
 
+// discoverPipfileLock tags every entry dependencyScope "unknown" rather than
+// "direct" or "transitive": Pipfile.lock's default/develop split is reliable
+// for usageContext, but the lock format itself doesn't retain which entries
+// were originally declared in the Pipfile versus pulled in transitively --
+// unlike npm's lockfile, which keeps each package's own "dependencies" list
+// and so lets discoverNode's buildNodeScopeMap reconstruct that distinction.
 func discoverPipfileLock(raw, manifestPath string) ([]Dependency, error) {
 	var lock pipfileLock
 	if err := json.Unmarshal([]byte(raw), &lock); err != nil {
 		return nil, err
 	}
 
+	groups := []struct {
+		packages     map[string]pipfilePackage
+		usageContext string
+	}{
+		{lock.Default, "production"},
+		{lock.Develop, "development"},
+	}
+
 	var deps []Dependency
-	for _, group := range []map[string]pipfilePackage{lock.Default, lock.Develop} {
-		for name, pkg := range group {
+	for _, group := range groups {
+		for name, pkg := range group.packages {
 			version := strings.TrimPrefix(pkg.Version, "==")
 			if version == "" {
 				continue
 			}
 			deps = append(deps, Dependency{
-				Ecosystem:    "PyPI",
-				Name:         normalizePyPIName(name),
-				Version:      version,
-				ManifestPath: manifestPath,
+				Ecosystem:       "PyPI",
+				Name:            normalizePyPIName(name),
+				Version:         version,
+				ManifestPath:    manifestPath,
+				DependencyScope: "unknown",
+				UsageContext:    group.usageContext,
 			})
 		}
 	}
 	return dedupe(deps), nil
 }
 
-func discoverRequirementsTXT(raw, manifestPath string) []Dependency {
+func discoverRequirementsTXT(raw, manifestPath, usageContext string) []Dependency {
 	var deps []Dependency
 	for _, rawLine := range strings.Split(raw, "\n") {
 		line := rawLine
@@ -106,10 +145,12 @@ func discoverRequirementsTXT(raw, manifestPath string) []Dependency {
 		}
 
 		deps = append(deps, Dependency{
-			Ecosystem:    "PyPI",
-			Name:         normalizePyPIName(match[1]),
-			Version:      match[3],
-			ManifestPath: manifestPath,
+			Ecosystem:       "PyPI",
+			Name:            normalizePyPIName(match[1]),
+			Version:         match[3],
+			ManifestPath:    manifestPath,
+			DependencyScope: "direct",
+			UsageContext:    usageContext,
 		})
 	}
 	return deps
@@ -129,51 +170,108 @@ var quotedStringRE = regexp.MustCompile(`"([^"]+)"|'([^']+)'`)
 var poetryTableRE = regexp.MustCompile(`(?s)\[tool\.poetry\.dependencies\](.*?)(?:\n\[|\z)`)
 var poetryLineRE = regexp.MustCompile(`(?m)^([A-Za-z0-9._-]+)\s*=\s*"([^"]+)"`)
 
-// discoverPyprojectTOML is a best-effort scan for two common shapes --
-// PEP 621's `dependencies = [...]` array and Poetry's
-// `[tool.poetry.dependencies]` table -- not a real TOML parser. Go's
-// standard library has no TOML support at all (unlike JSON or XML), and the
-// Node version of this tool's own pyproject.toml handling was already
-// best-effort rather than a full parser, so this stays consistent with that
-// rather than pulling in this project's first third-party dependency for
-// only-partial TOML coverage.
+// pep621OptionalRE finds the single [project.optional-dependencies] table;
+// pep621GroupRE then finds each `group = [...]` array within it, e.g. `dev =
+// [...]`, `test = [...]` -- the standard PEP 621 shape for optional/extra
+// dependency groups.
+var pep621OptionalRE = regexp.MustCompile(`(?s)\[project\.optional-dependencies\](.*?)(?:\n\[|\z)`)
+var pep621GroupRE = regexp.MustCompile(`(?s)([\w-]+)\s*=\s*\[(.*?)\]`)
+
+// poetryLegacyDevRE finds Poetry's older `[tool.poetry.dev-dependencies]`
+// table (superseded by dependency groups, but still seen in the wild).
+// poetryGroupRE finds each `[tool.poetry.group.<name>.dependencies]` table --
+// Poetry's current mechanism for named dependency groups (dev, test, docs).
+var poetryLegacyDevRE = regexp.MustCompile(`(?s)\[tool\.poetry\.dev-dependencies\](.*?)(?:\n\[|\z)`)
+var poetryGroupRE = regexp.MustCompile(`(?s)\[tool\.poetry\.group\.([\w-]+)\.dependencies\](.*?)(?:\n\[|\z)`)
+
+// discoverPyprojectTOML is a best-effort scan for PEP 621's `dependencies =
+// [...]` array (plus its `[project.optional-dependencies]` groups) and
+// Poetry's `[tool.poetry.dependencies]` table (plus its legacy
+// dev-dependencies table and current named dependency groups) -- not a real
+// TOML parser. Go's standard library has no TOML support at all (unlike JSON
+// or XML), and the Node version of this tool's own pyproject.toml handling
+// was already best-effort rather than a full parser, so this stays
+// consistent with that rather than pulling in this project's first
+// third-party dependency for only-partial TOML coverage.
+//
+// Every group's usageContext is decided by devGroupRE matching the group
+// name (e.g. "dev", "test", "docs") -- a naming convention, not something
+// TOML itself encodes, so an unconventionally-named dev group will be
+// (harmlessly) tagged "production" instead.
 func discoverPyprojectTOML(raw, manifestPath string) []Dependency {
 	var deps []Dependency
 
 	if m := pep621ArrayRE.FindStringSubmatch(raw); m != nil {
-		for _, quoted := range quotedStringRE.FindAllStringSubmatch(m[1], -1) {
-			spec := quoted[1]
-			if spec == "" {
-				spec = quoted[2]
-			}
-			match := requirementsLineRE.FindStringSubmatch(spec)
-			if match == nil {
-				continue
-			}
-			deps = append(deps, Dependency{
-				Ecosystem:    "PyPI",
-				Name:         normalizePyPIName(match[1]),
-				Version:      match[3],
-				ManifestPath: manifestPath,
-			})
+		deps = append(deps, parseTomlStringArray(m[1], manifestPath, "production")...)
+	}
+
+	if m := pep621OptionalRE.FindStringSubmatch(raw); m != nil {
+		for _, group := range pep621GroupRE.FindAllStringSubmatch(m[1], -1) {
+			groupName, arrayBody := group[1], group[2]
+			deps = append(deps, parseTomlStringArray(arrayBody, manifestPath, usageContextForGroup(groupName))...)
 		}
 	}
 
 	if m := poetryTableRE.FindStringSubmatch(raw); m != nil {
-		for _, line := range poetryLineRE.FindAllStringSubmatch(m[1], -1) {
-			name := line[1]
-			if strings.EqualFold(name, "python") {
-				continue
-			}
-			deps = append(deps, Dependency{
-				Ecosystem:    "PyPI",
-				Name:         normalizePyPIName(name),
-				Version:      stripRangePrefix(line[2]),
-				ManifestPath: manifestPath,
-			})
-		}
+		deps = append(deps, parsePoetryTable(m[1], manifestPath, "production")...)
+	}
+	if m := poetryLegacyDevRE.FindStringSubmatch(raw); m != nil {
+		deps = append(deps, parsePoetryTable(m[1], manifestPath, "development")...)
+	}
+	for _, group := range poetryGroupRE.FindAllStringSubmatch(raw, -1) {
+		groupName, body := group[1], group[2]
+		deps = append(deps, parsePoetryTable(body, manifestPath, usageContextForGroup(groupName))...)
 	}
 
+	return deps
+}
+
+func usageContextForGroup(groupName string) string {
+	if devGroupRE.MatchString(groupName) {
+		return "development"
+	}
+	return "production"
+}
+
+func parseTomlStringArray(source, manifestPath, usageContext string) []Dependency {
+	var deps []Dependency
+	for _, quoted := range quotedStringRE.FindAllStringSubmatch(source, -1) {
+		spec := quoted[1]
+		if spec == "" {
+			spec = quoted[2]
+		}
+		match := requirementsLineRE.FindStringSubmatch(spec)
+		if match == nil {
+			continue
+		}
+		deps = append(deps, Dependency{
+			Ecosystem:       "PyPI",
+			Name:            normalizePyPIName(match[1]),
+			Version:         match[3],
+			ManifestPath:    manifestPath,
+			DependencyScope: "direct",
+			UsageContext:    usageContext,
+		})
+	}
+	return deps
+}
+
+func parsePoetryTable(source, manifestPath, usageContext string) []Dependency {
+	var deps []Dependency
+	for _, line := range poetryLineRE.FindAllStringSubmatch(source, -1) {
+		name := line[1]
+		if strings.EqualFold(name, "python") {
+			continue
+		}
+		deps = append(deps, Dependency{
+			Ecosystem:       "PyPI",
+			Name:            normalizePyPIName(name),
+			Version:         stripRangePrefix(line[2]),
+			ManifestPath:    manifestPath,
+			DependencyScope: "direct",
+			UsageContext:    usageContext,
+		})
+	}
 	return deps
 }
 

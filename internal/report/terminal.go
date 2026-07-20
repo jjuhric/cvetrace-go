@@ -57,6 +57,9 @@ func PrintTerminal(vulns []trace.Vulnerability) {
 			fixed,
 		)
 		fmt.Println("  " + colorGray + v.ManifestPath + colorReset)
+		if context := describeContext(v); context != "" {
+			fmt.Println("  " + colorGray + context + colorReset)
+		}
 		if v.Summary != "" {
 			fmt.Println("  " + colorGray + v.Summary + colorReset)
 		}
@@ -81,4 +84,28 @@ func preferredLabel(v trace.Vulnerability) string {
 		}
 	}
 	return v.ID
+}
+
+// describeContext builds a one-line triage summary from the heuristic scope/
+// usage fields -- "transitive (via a > b)", "production", etc. None of this
+// is proof of anything: dependencyScope/usageContext are noise-reduction
+// signals for prioritizing what to look at first, not a reachability
+// guarantee. Returns "" when there's nothing informative to say (both fields
+// unknown), so the terminal report doesn't print an empty line for every
+// finding from a source that can't determine either.
+func describeContext(v trace.Vulnerability) string {
+	var parts []string
+
+	if v.DependencyScope == "transitive" && len(v.DependencyPath) > 1 {
+		via := strings.Join(v.DependencyPath[:len(v.DependencyPath)-1], " > ")
+		parts = append(parts, "transitive (via "+via+")")
+	} else if v.DependencyScope != "" && v.DependencyScope != "unknown" {
+		parts = append(parts, v.DependencyScope)
+	}
+
+	if v.UsageContext != "" && v.UsageContext != "unknown" {
+		parts = append(parts, v.UsageContext)
+	}
+
+	return strings.Join(parts, " · ")
 }
