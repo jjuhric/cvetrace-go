@@ -29,6 +29,30 @@ type Vulnerability struct {
 	FixedVersion   string   `json:"fixedVersion"` // "" means no known fix yet
 	URL            string   `json:"url"`
 
+	// AdvisoryDetails is OSV.dev's longer freeform advisory text -- often
+	// includes a "Remediation Advice"/mitigation section beyond just
+	// "upgrade to X" (e.g. Log4Shell's config-flag workaround for anyone who
+	// can't upgrade immediately). "" when OSV has none.
+	AdvisoryDetails string `json:"advisoryDetails,omitempty"`
+
+	// RecommendedVersion is the single highest FixedVersion across every CVE
+	// known for this exact (ManifestPath, Name) package instance -- set by
+	// addRecommendedVersions after every Vulnerability for a scan has been
+	// built, since it depends on seeing every finding for that package
+	// first. "" until then, and "" if none of that package's findings have a
+	// known fix yet.
+	RecommendedVersion string `json:"recommendedVersion,omitempty"`
+
+	// UpdateImpact is a semver-distance heuristic between CurrentVersion and
+	// FixedVersion ("patch"/"minor"/"major"/"unknown") -- a signal for how
+	// likely the fix is to be backwards-compatible, not a guarantee.
+	UpdateImpact string `json:"updateImpact"`
+
+	// RemediationTier collapses FixedVersion + UpdateImpact into one
+	// decision an agent or human can branch on directly -- see
+	// classifyRemediationTier's doc comment.
+	RemediationTier string `json:"remediationTier"`
+
 	// DependencyScope/UsageContext/DependencyPath are carried straight
 	// through from the discover.Dependency this Vulnerability was built
 	// from -- see that struct's field docs for exactly what each means and
@@ -90,7 +114,7 @@ func Resolve(deps []discover.Dependency) ([]Vulnerability, error) {
 		}
 	}
 
-	vulns = dedupeByCVE(vulns)
+	vulns = addRecommendedVersions(dedupeByCVE(vulns))
 
 	// Go note: sort.SliceStable takes the slice to sort and a "less"
 	// function -- there's no built-in comparator interface for plain
@@ -133,6 +157,34 @@ func dedupeByCVE(vulns []Vulnerability) []Vulnerability {
 	return out
 }
 
+// addRecommendedVersions aggregates each package instance's (ManifestPath +
+// Name) individual CVE fixes into one RecommendedVersion: the highest
+// FixedVersion among them, since upgrading to it satisfies every lower one
+// too -- lets a human/AI jump straight to "upgrade to X, clears all N known
+// issues" instead of reconciling N separate per-CVE fix versions (log4j-core
+// alone has several in this project's own test fixture, each with its own
+// nearest fix). A Vulnerability whose own FixedVersion is "" (no fix
+// published yet for that specific CVE) is NOT resolved just by its package
+// reaching a RecommendedVersion -- see AdvisoryDetails for mitigation
+// guidance in that case instead.
+func addRecommendedVersions(vulns []Vulnerability) []Vulnerability {
+	maxFixedByPackage := make(map[string]string)
+	for _, v := range vulns {
+		if v.FixedVersion == "" {
+			continue
+		}
+		key := v.ManifestPath + ":" + v.Name
+		if current, ok := maxFixedByPackage[key]; !ok || compareVersions(v.FixedVersion, current) > 0 {
+			maxFixedByPackage[key] = v.FixedVersion
+		}
+	}
+
+	for i := range vulns {
+		vulns[i].RecommendedVersion = maxFixedByPackage[vulns[i].ManifestPath+":"+vulns[i].Name]
+	}
+	return vulns
+}
+
 // cveOrID picks the CVE-* alias to key on when one exists (the two records
 // OSV.dev might index the same vulnerability under both carry the same CVE
 // alias, even though their own ids differ), falling back to the record's own
@@ -172,6 +224,9 @@ func buildVulnerability(dep discover.Dependency, detail *VulnDetail) Vulnerabili
 		usageContext = "unknown"
 	}
 
+	fixedVersion := minimumFixedVersion(detail, dep.Ecosystem, dep.Name, dep.Version)
+	updateImpact := classifyVersionJump(dep.Version, fixedVersion)
+
 	return Vulnerability{
 		ManifestPath:    dep.ManifestPath,
 		Ecosystem:       dep.Ecosystem,
@@ -180,12 +235,69 @@ func buildVulnerability(dep discover.Dependency, detail *VulnDetail) Vulnerabili
 		ID:              detail.ID,
 		Aliases:         detail.Aliases,
 		Summary:         detail.Summary,
+		AdvisoryDetails: detail.Details,
 		Severity:        severity,
-		FixedVersion:    minimumFixedVersion(detail, dep.Ecosystem, dep.Name, dep.Version),
+		FixedVersion:    fixedVersion,
 		URL:             url,
 		DependencyScope: dependencyScope,
 		UsageContext:    usageContext,
 		DependencyPath:  dep.DependencyPath,
+		UpdateImpact:    updateImpact,
+		RemediationTier: classifyRemediationTier(fixedVersion, updateImpact),
+	}
+}
+
+// classifyVersionJump compares the first differing dotted-numeric segment
+// between current and fixed. Not real semver (doesn't handle pre-release
+// tags, and Maven/Gradle coordinates don't always follow semver conventions
+// to begin with) -- a best-effort signal for triage, always to be read as
+// "likely," never "guaranteed."
+func classifyVersionJump(current, fixed string) string {
+	if fixed == "" {
+		return "unknown"
+	}
+	c, cOK := parseVersionParts(current)
+	f, fOK := parseVersionParts(fixed)
+	if !cOK || !fOK {
+		return "unknown"
+	}
+	switch {
+	case f[0] != c[0]:
+		return "major"
+	case f[1] != c[1]:
+		return "minor"
+	default:
+		return "patch"
+	}
+}
+
+// classifyRemediationTier collapses FixedVersion + UpdateImpact into one
+// decision an agent or human can branch on directly, instead of everyone
+// re-deriving the same three-way call from those two fields independently
+// (and potentially disagreeing on edge cases):
+//
+//	"safe-to-update"    patch/minor bump, likely backwards-compatible -- apply it.
+//	"needs-approval"    major bump, likely to need code changes -- propose a plan,
+//	                    wait for a human to approve before touching anything.
+//	"no-fix-available"  no version resolves this specific CVE yet -- see
+//	                    AdvisoryDetails for a workaround/mitigation instead.
+//	"unknown-impact"    a fix exists but current/fixed versions weren't both
+//	                    parseable as dotted-numeric, so the size of the jump
+//	                    can't be classified -- treated like needs-approval:
+//	                    safety can't be confirmed either way.
+//
+// Still a heuristic layered on other heuristics, not a safety guarantee --
+// see classifyVersionJump's own caveat above.
+func classifyRemediationTier(fixedVersion, updateImpact string) string {
+	switch {
+	case fixedVersion == "":
+		return "no-fix-available"
+	case updateImpact == "patch" || updateImpact == "minor":
+		return "safe-to-update"
+	case updateImpact == "major":
+		return "needs-approval"
+	default:
+		return "unknown-impact"
 	}
 }
 

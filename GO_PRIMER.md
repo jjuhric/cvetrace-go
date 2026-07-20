@@ -280,7 +280,10 @@ report) and each one builds on the last:
 8. [`internal/trace/resolve.go`](internal/trace/resolve.go) — the most involved file;
    read its doc comments carefully, especially `minimumFixedVersion` and `dedupeByCVE`
    (both fix real bugs found while building this project, documented right where the
-   fix lives).
+   fix lives), plus `classifyVersionJump`/`classifyRemediationTier`/
+   `addRecommendedVersions` -- small, independently testable classifier functions that
+   are a good example of Go's habit of writing many single-purpose, easy-to-unit-test
+   functions rather than one larger one.
 9. [`internal/trace/usage.go`](internal/trace/usage.go) — a second `filepath.WalkDir`
    pass (this time over source files, not manifests) plus `regexp.QuoteMeta` for
    building a regex safely from an arbitrary package name.

@@ -125,3 +125,78 @@ func TestDedupeByCVEKeepsTheSameCVEAcrossDifferentManifestsSeparate(t *testing.T
 		t.Fatalf("got %d records, want 2 (same CVE, different manifests, both should be kept)", len(got))
 	}
 }
+
+func TestClassifyVersionJump(t *testing.T) {
+	cases := []struct {
+		name, current, fixed, want string
+	}{
+		{"patch bump", "2.14.0", "2.14.1", "patch"},
+		{"minor bump", "2.14.1", "2.15.0", "minor"},
+		{"major bump", "1.9.9", "2.0.0", "major"},
+		{"no known fix", "1.0.0", "", "unknown"},
+		{"unparseable current version", "not-a-version", "2.0.0", "unknown"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := classifyVersionJump(c.current, c.fixed)
+			if got != c.want {
+				t.Errorf("classifyVersionJump(%q, %q) = %q, want %q", c.current, c.fixed, got, c.want)
+			}
+		})
+	}
+}
+
+func TestClassifyRemediationTier(t *testing.T) {
+	cases := []struct {
+		name, fixedVersion, updateImpact, want string
+	}{
+		{"no fix yet", "", "unknown", "no-fix-available"},
+		{"patch is safe", "1.2.4", "patch", "safe-to-update"},
+		{"minor is safe", "1.3.0", "minor", "safe-to-update"},
+		{"major needs approval", "2.0.0", "major", "needs-approval"},
+		{"unparseable impact", "1.2.4", "unknown", "unknown-impact"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := classifyRemediationTier(c.fixedVersion, c.updateImpact)
+			if got != c.want {
+				t.Errorf("classifyRemediationTier(%q, %q) = %q, want %q", c.fixedVersion, c.updateImpact, got, c.want)
+			}
+		})
+	}
+}
+
+// TestAddRecommendedVersionsPicksTheHighestFixAcrossCVEsForTheSamePackage
+// mirrors the real log4j-core fixture, which has several CVEs each with
+// their own nearest fix -- RecommendedVersion should be the single highest
+// one, so upgrading once clears every known issue for that package.
+func TestAddRecommendedVersionsPicksTheHighestFixAcrossCVEsForTheSamePackage(t *testing.T) {
+	vulns := []Vulnerability{
+		{ManifestPath: "build.gradle", Name: "log4j-core", FixedVersion: "2.15.0"},
+		{ManifestPath: "build.gradle", Name: "log4j-core", FixedVersion: "2.17.1"},
+		{ManifestPath: "build.gradle", Name: "log4j-core", FixedVersion: ""}, // no fix published yet for this one
+	}
+
+	got := addRecommendedVersions(vulns)
+	for _, v := range got {
+		if v.RecommendedVersion != "2.17.1" {
+			t.Errorf("got recommendedVersion %q for a record with fixedVersion %q, want %q",
+				v.RecommendedVersion, v.FixedVersion, "2.17.1")
+		}
+	}
+}
+
+func TestAddRecommendedVersionsScopesByManifestPath(t *testing.T) {
+	vulns := []Vulnerability{
+		{ManifestPath: "a/pom.xml", Name: "pkg", FixedVersion: "1.5.0"},
+		{ManifestPath: "b/build.gradle", Name: "pkg", FixedVersion: "9.0.0"},
+	}
+
+	got := addRecommendedVersions(vulns)
+	if got[0].RecommendedVersion != "1.5.0" {
+		t.Errorf("a/pom.xml: got recommendedVersion %q, want %q (shouldn't be influenced by b/build.gradle's fix)", got[0].RecommendedVersion, "1.5.0")
+	}
+	if got[1].RecommendedVersion != "9.0.0" {
+		t.Errorf("b/build.gradle: got recommendedVersion %q, want %q", got[1].RecommendedVersion, "9.0.0")
+	}
+}

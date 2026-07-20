@@ -18,6 +18,7 @@ const (
 	colorReset  = "\x1b[0m"
 	colorRed    = "\x1b[31m"
 	colorYellow = "\x1b[33m"
+	colorGreen  = "\x1b[32m"
 	colorGray   = "\x1b[90m"
 	colorCyan   = "\x1b[36m"
 	colorBold   = "\x1b[1m"
@@ -36,6 +37,31 @@ var codeReferenceLabel = map[string]string{
 	"found":     "used in code",
 	"not-found": "no code reference found",
 	"unknown":   "code usage unknown",
+}
+
+var updateImpactLabel = map[string]string{
+	"patch":   "patch bump, likely safe",
+	"minor":   "minor bump, likely safe",
+	"major":   "major bump — review before applying",
+	"unknown": "fix version unknown",
+}
+
+// remediationAction is the single call-to-action per finding -- see
+// trace.classifyRemediationTier's doc comment for exactly what each tier
+// means and doesn't guarantee. Meant to be actionable by a human or an AI
+// agent without needing to cross-reference UpdateImpact/FixedVersion itself.
+var remediationAction = map[string]string{
+	"safe-to-update":   "safe to auto-update",
+	"needs-approval":   "needs approval before updating (major version bump)",
+	"no-fix-available": "no fix published yet -- see advisory for mitigation guidance",
+	"unknown-impact":   "fix version unparseable -- treat like needs-approval",
+}
+
+var remediationColor = map[string]string{
+	"safe-to-update":   colorGreen,
+	"needs-approval":   colorYellow,
+	"no-fix-available": colorGray,
+	"unknown-impact":   colorGray,
 }
 
 // PrintTerminal writes a human-readable, colorized report to stdout.
@@ -62,8 +88,24 @@ func PrintTerminal(vulns []trace.Vulnerability) {
 			paint, v.Severity, colorReset,
 			fixed,
 		)
+
+		action := remediationAction[v.RemediationTier]
+		if action == "" {
+			action = v.RemediationTier
+		}
+		remediationPaint := remediationColor[v.RemediationTier]
+		if remediationPaint == "" {
+			remediationPaint = colorGray
+		}
+		fmt.Println("  " + remediationPaint + "-> " + action + colorReset)
+
 		fmt.Println("  " + colorGray + v.ManifestPath + colorReset)
 		fmt.Println("  " + colorGray + describeContext(v) + colorReset)
+		if v.RecommendedVersion != "" && v.RecommendedVersion != v.FixedVersion {
+			fmt.Println("  " + colorGray +
+				"recommended target: " + v.RecommendedVersion + " (clears every known issue for this package)" +
+				colorReset)
+		}
 		if v.Summary != "" {
 			fmt.Println("  " + colorGray + v.Summary + colorReset)
 		}
@@ -91,10 +133,12 @@ func preferredLabel(v trace.Vulnerability) string {
 }
 
 // describeContext builds a one-line triage summary from the heuristic scope/
-// usage/code-reference fields -- "transitive (via a > b) · production · used
-// in code", etc. None of this is proof of anything: dependencyScope/
-// usageContext/codeReference are noise-reduction signals for prioritizing
-// what to look at first, not a reachability guarantee.
+// usage/code-reference/update-impact fields -- "transitive (via a > b) ·
+// production · used in code · minor bump, likely safe", etc. None of this is
+// proof of anything: dependencyScope/usageContext/codeReference are noise-
+// reduction signals for prioritizing what to look at first, and updateImpact
+// is a semver-distance signal, not a safety guarantee -- see
+// classifyRemediationTier's doc comment in internal/trace/resolve.go.
 func describeContext(v trace.Vulnerability) string {
 	var parts []string
 
@@ -109,11 +153,17 @@ func describeContext(v trace.Vulnerability) string {
 		parts = append(parts, v.UsageContext)
 	}
 
-	label, ok := codeReferenceLabel[v.CodeReference]
+	codeRefLabel, ok := codeReferenceLabel[v.CodeReference]
 	if !ok {
-		label = codeReferenceLabel["unknown"]
+		codeRefLabel = codeReferenceLabel["unknown"]
 	}
-	parts = append(parts, label)
+	parts = append(parts, codeRefLabel)
+
+	impactLabel, ok := updateImpactLabel[v.UpdateImpact]
+	if !ok {
+		impactLabel = updateImpactLabel["unknown"]
+	}
+	parts = append(parts, impactLabel)
 
 	return strings.Join(parts, " · ")
 }

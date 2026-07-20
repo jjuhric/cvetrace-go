@@ -10,12 +10,13 @@ into the binary, making it much larger).
 > **Status: early slice.** This is one of several planned increments — see
 > [What's implemented so far](#whats-implemented-so-far). Node, Java/Maven, Java/Gradle,
 > and Python are all detected now (Gradle by actually invoking the target project's own
-> Gradle wrapper, same as the Node version), each tagged with `dependencyScope`/
-> `usageContext`/`dependencyPath`; most of the rest of the Node version's "remediation
-> intelligence" report fields (`codeReference`, `updateImpact`, `recommendedVersion`,
-> `overrideSnippet`, `advisoryDetails`, `priorityScore`, `remediationTier`) are **not
-> built yet**. There's also no release pipeline yet publishing downloadable binaries —
-> for now this is run from source (see [Usage](#usage)); prebuilt, zero-install binaries
+> Gradle wrapper, same as the Node version), and every finding is tagged with
+> `dependencyScope`/`usageContext`/`dependencyPath`/`codeReference`/`updateImpact`/
+> `recommendedVersion`/`advisoryDetails`/`remediationTier`. Only `overrideSnippet` and
+> `priorityScore`/`priorityLabel` from the Node version's "remediation intelligence"
+> report fields are **not built yet**. There's also no release pipeline yet publishing
+> downloadable binaries — for now this is run from source (see [Usage](#usage)); prebuilt,
+> zero-install binaries
 > are the whole point of doing this in Go, and are a planned near-term addition.
 
 **New to Go?** See [GO_PRIMER.md](GO_PRIMER.md) — a concept map from what you already
@@ -86,9 +87,12 @@ the code. More detail in [GO_PRIMER.md](GO_PRIMER.md).
    key) for each dependency, compute the correct fixed version for the *specific*
    affected-version range the current version actually falls in (a real bug from the
    Node version's development, ported over as a fix and a regression test here too --
-   see `minimumFixedVersion`'s doc comment in `internal/trace/resolve.go`), and collapse
+   see `minimumFixedVersion`'s doc comment in `internal/trace/resolve.go`), collapse
    duplicate records OSV.dev sometimes indexes the same CVE under (another real bug,
-   found this time while building *this* port -- see `dedupeByCVE`'s doc comment).
+   found this time while building *this* port -- see `dedupeByCVE`'s doc comment),
+   classify each fix's semver distance (`updateImpact`) and the single actionable
+   decision that follows from it (`remediationTier`), and aggregate every CVE known for
+   the same package instance into one `recommendedVersion`.
 3. **Usage detection** (`internal/trace/usage.go`) — a second, separate walk of the
    target directory's own source files (not manifests), tagging each finding's
    `codeReference` by regex-scanning for an import/require statement for that package.
@@ -102,10 +106,13 @@ the code. More detail in [GO_PRIMER.md](GO_PRIMER.md).
 | `dependencyPath` | array or omitted | For transitive findings **in Node or Gradle** (the only ecosystems this port resolves a real dependency graph for): the chain from a direct dependency down to this package, e.g. `["webpack", "loader-utils", "vulnerable-pkg"]`. Omitted for direct dependencies, and always omitted for Maven/Python since those aren't resolved transitively at all. |
 | `usageContext` | `production` / `development` / `unknown` | Whether the package is reachable from your production dependencies, or only from dev/test/build tooling (`devDependencies`, Maven `test` scope, Gradle `testImplementation`, etc.) that never ships. |
 | `codeReference` | `found` / `not-found` / `unknown` | Whether the package is actually imported/required anywhere in your own source files, not just declared in a manifest. **This is a usage signal, not reachability analysis** -- `found` doesn't mean the specific vulnerable function is called, and `not-found` doesn't prove the code is unused (dynamic requires, reflection, etc. are missed). Java/Kotlin detection assumes the library's import matches its Maven/Gradle groupId (usually true, not guaranteed); Python detection uses the PyPI package name directly, which misses packages whose import name differs from what's published (e.g. PyYAML is `import yaml`) -- a known gap, not silently handled. See `DetectCodeReferences` in `internal/trace/usage.go`. |
+| `updateImpact` | `patch` / `minor` / `major` / `unknown` | How big a semver jump the fix requires -- a heuristic for how likely it is to be backwards-compatible, not a guarantee. Log4Shell's own fix (2.14.1 → 2.15.0) is itself a "minor" bump by this measure. |
+| `recommendedVersion` | version or omitted | The single highest fix version across every CVE known for this exact package instance -- "upgrade to X, clears everything" instead of reconciling N separate per-CVE targets. Omitted if no fix is known for any of them yet. |
+| `advisoryDetails` | text or omitted | OSV.dev's full advisory text, which frequently has a mitigation/workaround section beyond "upgrade" (e.g. Log4Shell's config-flag workaround for anyone who can't upgrade immediately). |
+| `remediationTier` | `safe-to-update` / `needs-approval` / `no-fix-available` / `unknown-impact` | Collapses `fixedVersion` + `updateImpact` into one decision to branch on directly -- see `classifyRemediationTier`'s doc comment in `internal/trace/resolve.go` for exactly what each value does and doesn't guarantee. Shown as the terminal report's `->` action line. |
 
-The rest of the Node version's "remediation intelligence" fields (`updateImpact`,
-`recommendedVersion`, `overrideSnippet`, `advisoryDetails`, `priorityScore`/
-`priorityLabel`, `remediationTier`), plus `--fail-on`/`--exclude`/`--ignore`, are **not
+The rest of the Node version's "remediation intelligence" fields (`overrideSnippet`,
+`priorityScore`/`priorityLabel`), plus `--fail-on`/`--exclude`/`--ignore`, are **not
 built yet**. The Node version (`jjuhric/cvetrace`) is the reference for what to build
 next; this project is about porting it to Go incrementally, not reinventing it.
 
