@@ -64,7 +64,18 @@ var remediationColor = map[string]string{
 	"unknown-impact":   colorGray,
 }
 
-// PrintTerminal writes a human-readable, colorized report to stdout.
+var priorityColor = map[string]string{
+	"P1": colorRed,
+	"P2": colorRed,
+	"P3": colorYellow,
+	"P4": colorGray,
+}
+
+// PrintTerminal writes a human-readable, colorized report to stdout, flat and
+// sorted by PriorityScore descending (already sorted by trace.ApplyPriority)
+// -- priority mixes findings across manifests deliberately, so this is no
+// longer grouped by manifest file; each line names its own manifest instead.
+// Meant to be worked top-down.
 func PrintTerminal(vulns []trace.Vulnerability) {
 	if len(vulns) == 0 {
 		fmt.Println(colorGray + "No known vulnerabilities found." + colorReset)
@@ -76,13 +87,18 @@ func PrintTerminal(vulns []trace.Vulnerability) {
 		if paint == "" {
 			paint = colorGray
 		}
+		priorityPaint := priorityColor[v.PriorityLabel]
+		if priorityPaint == "" {
+			priorityPaint = colorGray
+		}
 
 		fixed := v.FixedVersion
 		if fixed == "" {
 			fixed = "unknown"
 		}
 
-		fmt.Printf("%s%s%s %s@%s [%s%s%s] -> fix: %s\n",
+		fmt.Printf("%s[%s]%s %s%s%s %s@%s [%s%s%s] -> fix: %s\n",
+			priorityPaint, v.PriorityLabel, colorReset,
 			colorRed, preferredLabel(v), colorReset,
 			v.Name, v.CurrentVersion,
 			paint, v.Severity, colorReset,

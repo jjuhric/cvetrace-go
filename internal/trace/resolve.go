@@ -59,6 +59,12 @@ type Vulnerability struct {
 	// transitive with a known target version (see generateOverrideSnippet).
 	OverrideSnippet *OverrideSnippet `json:"overrideSnippet,omitempty"`
 
+	// PriorityScore/PriorityLabel are set by ApplyPriority, the pipeline's
+	// last enrichment step -- see ComputePriority's doc comment. Both are
+	// their zero values (0, "") on every Vulnerability from Resolve itself.
+	PriorityScore float64 `json:"priorityScore"`
+	PriorityLabel string  `json:"priorityLabel"`
+
 	// DependencyScope/UsageContext/DependencyPath are carried straight
 	// through from the discover.Dependency this Vulnerability was built
 	// from -- see that struct's field docs for exactly what each means and

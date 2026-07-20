@@ -10,14 +10,14 @@ into the binary, making it much larger).
 > **Status: early slice.** This is one of several planned increments — see
 > [What's implemented so far](#whats-implemented-so-far). Node, Java/Maven, Java/Gradle,
 > and Python are all detected now (Gradle by actually invoking the target project's own
-> Gradle wrapper, same as the Node version), and every finding is tagged with
-> `dependencyScope`/`usageContext`/`dependencyPath`/`codeReference`/`updateImpact`/
-> `recommendedVersion`/`advisoryDetails`/`remediationTier`/`overrideSnippet`. Only
-> `priorityScore`/`priorityLabel` from the Node version's "remediation intelligence"
-> report fields are **not built yet**. There's also no release pipeline yet publishing
-> downloadable binaries — for now this is run from source (see [Usage](#usage)); prebuilt,
-> zero-install binaries
-> are the whole point of doing this in Go, and are a planned near-term addition.
+> Gradle wrapper, same as the Node version), and every finding is tagged with the Node
+> version's full "remediation intelligence" field set: `dependencyScope`/`usageContext`/
+> `dependencyPath`/`codeReference`/`updateImpact`/`recommendedVersion`/
+> `advisoryDetails`/`remediationTier`/`overrideSnippet`/`priorityScore`/`priorityLabel`.
+> What's left is `--fail-on`/`--exclude`/`--ignore` CLI flags and a release pipeline
+> publishing downloadable binaries — for now this is run from source (see
+> [Usage](#usage)); prebuilt, zero-install binaries are the whole point of doing this in
+> Go, and are a planned near-term addition.
 
 **New to Go?** See [GO_PRIMER.md](GO_PRIMER.md) — a concept map from what you already
 know from the Node version of this project (JavaScript) to Go, plus pointers to where
@@ -99,7 +99,14 @@ the code. More detail in [GO_PRIMER.md](GO_PRIMER.md).
 4. **Override snippets** (`internal/trace/override.go`) — for confidently transitive
    findings with a known target version, generates the exact npm/Gradle/(future-ready
    Maven) snippet to force that version without waiting on the parent to update.
-5. **Report** (`internal/report`) — a colorized terminal report, or `--json`.
+5. **Priority** (`internal/trace/priority.go`) — combines severity, `usageContext`, and
+   `codeReference` (plus a small `updateImpact` tiebreak favoring easy wins) into one
+   sortable `priorityScore` and a P1-P4 `priorityLabel`, and re-sorts every finding by it
+   -- this is the pipeline's final ordering, deliberately worded differently from
+   `severity` so e.g. "severity: CRITICAL, priority: P4" (a critical CVE in dev-only code
+   never referenced in your own source) reads as a sensible triage call, not a
+   contradiction.
+6. **Report** (`internal/report`) — a colorized terminal report, or `--json`.
 
 ## Fields on each finding
 
@@ -114,11 +121,13 @@ the code. More detail in [GO_PRIMER.md](GO_PRIMER.md).
 | `advisoryDetails` | text or omitted | OSV.dev's full advisory text, which frequently has a mitigation/workaround section beyond "upgrade" (e.g. Log4Shell's config-flag workaround for anyone who can't upgrade immediately). |
 | `remediationTier` | `safe-to-update` / `needs-approval` / `no-fix-available` / `unknown-impact` | Collapses `fixedVersion` + `updateImpact` into one decision to branch on directly -- see `classifyRemediationTier`'s doc comment in `internal/trace/resolve.go` for exactly what each value does and doesn't guarantee. Shown as the terminal report's `->` action line. |
 | `overrideSnippet` | object or omitted (JSON output only) | For transitive findings with a known target version: the exact `{file, instructions, snippet}` to force the patched version without waiting on the parent dependency to update -- npm `overrides`, Gradle `resolutionStrategy.force`, or (ready for when Maven support grows that far) Maven `dependencyManagement`. Often the fastest real fix for a transitive CVE. Omitted for direct dependencies and for ecosystems that don't resolve transitively at all. See `generateOverrideSnippet` in `internal/trace/override.go`. |
+| `priorityScore` / `priorityLabel` | number / `P1`-`P4` | A single sortable triage ranking combining severity, `usageContext`, `codeReference`, and a small `updateImpact` bonus -- see `ComputePriority`'s doc comment in `internal/trace/priority.go` for the exact formula and, importantly, what it isn't (an authoritative risk score). This is the terminal report's actual sort order and the `[P#]` prefix on each line. |
 
-The rest of the Node version's "remediation intelligence" fields (`priorityScore`/
-`priorityLabel`), plus `--fail-on`/`--exclude`/`--ignore`, are **not built yet**. The
-Node version (`jjuhric/cvetrace`) is the reference for what to build next; this project
-is about porting it to Go incrementally, not reinventing it.
+Every field from the Node version's "remediation intelligence" set now exists in this
+port. What's left is `--fail-on`/`--exclude`/`--ignore` CLI flags, richer `--help` text,
+and the release pipeline -- see [What's implemented so far](#whats-implemented-so-far).
+The Node version (`jjuhric/cvetrace`) remains the reference for exact behavior; this
+project is about porting it to Go faithfully, not reinventing it.
 
 ## What's implemented so far
 

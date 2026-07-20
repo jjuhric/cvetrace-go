@@ -293,5 +293,9 @@ report) and each one builds on the last:
     JS's `coordinate.split(":")` followed by taking `[0]`/`[1]` does, without building an
     intermediate array just to throw most of it away) and a composite-literal-elision
     example worth its own look in `npmOverride`.
-11. [`internal/cli/cli.go`](internal/cli/cli.go) — how it all gets wired into a runnable
+11. [`internal/trace/priority.go`](internal/trace/priority.go) — a short, pure
+    calculation with no I/O at all, and `math.Round(x*100)/100` for rounding to two
+    decimal places (Go's `math` package has no built-in "round to N decimals" the way
+    some languages do).
+12. [`internal/cli/cli.go`](internal/cli/cli.go) — how it all gets wired into a runnable
     command.
