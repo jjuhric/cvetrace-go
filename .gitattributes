@@ -1,0 +1,9 @@
+# Force LF line endings for Go source, regardless of what the checkout
+# machine's git config (core.autocrlf) would otherwise do. gofmt requires LF
+# and treats a CRLF-terminated file as "not formatted" -- without this, a
+# clean local `gofmt -l .` on Windows can still fail in CI on a Windows
+# runner, since GitHub's windows-latest runner converts checked-out files to
+# CRLF by default.
+*.go text eol=lf
+go.mod text eol=lf
+go.sum text eol=lf
