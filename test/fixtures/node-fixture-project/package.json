@@ -1,0 +1,9 @@
+{
+  "name": "node-fixture-project",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Fixture project for cvetrace e2e tests: pins a package version with a known CVE.",
+  "dependencies": {
+    "minimist": "0.0.8"
+  }
+}

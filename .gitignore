@@ -1,0 +1,4 @@
+# Compiled binaries (built by `go build`, and by the release pipeline later)
+/cvetrace
+/cvetrace.exe
+/dist/
