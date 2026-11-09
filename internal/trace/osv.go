@@ -12,7 +12,15 @@ import (
 	"github.com/jjuhric/cvetrace-go/internal/discover"
 )
 
-const osvAPIBase = "https://api.osv.dev/v1"
+// osvAPIBase is a var (not a const) only so tests can point it at a local
+// fake server; nothing in the tool itself changes it.
+var osvAPIBase = "https://api.osv.dev/v1"
+
+// osvBatchLimit is OSV.dev's documented maximum number of queries in one
+// /querybatch request. A bigger request is refused with "400 Bad Request", so a
+// project with more dependencies than this (several lockfiles, a monorepo) is
+// sent in chunks of at most this many and the answers are joined back in order.
+var osvBatchLimit = 1000
 
 // The types below mirror only the parts of OSV.dev's JSON shapes this
 // project actually reads -- see https://google.github.io/osv.dev/api/.
@@ -54,6 +62,28 @@ func QueryBatch(deps []discover.Dependency) ([][]string, error) {
 		return nil, nil
 	}
 
+	// Go note: deps[start:end] is a slice of the same underlying array, not a
+	// copy, so chunking a big list this way costs nothing extra.
+	ids := make([][]string, 0, len(deps))
+	for start := 0; start < len(deps); start += osvBatchLimit {
+		end := start + osvBatchLimit
+		if end > len(deps) {
+			end = len(deps)
+		}
+		chunk, err := queryOneBatch(deps[start:end])
+		if err != nil {
+			return nil, err
+		}
+		if len(chunk) != end-start {
+			return nil, fmt.Errorf("OSV.dev querybatch returned %d results for %d queries", len(chunk), end-start)
+		}
+		ids = append(ids, chunk...)
+	}
+	return ids, nil
+}
+
+// queryOneBatch sends one /querybatch request (at most osvBatchLimit queries).
+func queryOneBatch(deps []discover.Dependency) ([][]string, error) {
 	reqBody := queryBatchRequest{Queries: make([]batchQuery, len(deps))}
 	for i, dep := range deps {
 		reqBody.Queries[i] = batchQuery{

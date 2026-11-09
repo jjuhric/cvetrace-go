@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"os/exec"
 	"path/filepath"
@@ -124,10 +125,17 @@ func TestScanReportsKnownCVEInGradleFixtureViaRealInvocation(t *testing.T) {
 func TestScanWalksAMixedDirectoryAndFindsAllFourEcosystems(t *testing.T) {
 	fixturesDir := filepath.Join("..", "..", "test", "fixtures")
 
+	// Go note: Output() returns stdout only; stderr is collected separately in
+	// a bytes.Buffer. The JSON report is on stdout, while warnings (such as
+	// "couldn't invoke Gradle ... falling back to static parsing" when the
+	// machine's Java is newer than the fixture's Gradle supports) go to stderr,
+	// exactly as `cvetrace scan --json > report.json` would see them.
 	cmd := exec.Command("go", "run", ".", "scan", fixturesDir, "--json")
-	out, err := cmd.CombinedOutput()
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
 	if err != nil {
-		t.Fatalf("cvetrace scan --json failed: %v\noutput:\n%s", err, out)
+		t.Fatalf("cvetrace scan --json failed: %v\nstdout:\n%s\nstderr:\n%s", err, out, stderr.String())
 	}
 
 	output := string(out)
@@ -147,7 +155,7 @@ func TestScanWalksAMixedDirectoryAndFindsAllFourEcosystems(t *testing.T) {
 		} `json:"vulnerabilities"`
 	}
 	if err := json.Unmarshal(out, &report); err != nil {
-		t.Fatalf("could not parse output as JSON: %v", err)
+		t.Fatalf("could not parse output as JSON: %v\noutput:\n%s", err, out)
 	}
 
 	manifests := make(map[string]bool)
