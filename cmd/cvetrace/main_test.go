@@ -147,7 +147,9 @@ func TestScanWalksAMixedDirectoryAndFindsAllFourEcosystems(t *testing.T) {
 		} `json:"vulnerabilities"`
 	}
 	if err := json.Unmarshal(out, &report); err != nil {
-		t.Fatalf("could not parse output as JSON: %v", err)
+		t.Fatalf("could not parse output as JSON: %v
+output:
+%s", err, out)
 	}
 
 	manifests := make(map[string]bool)
